@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(node --check server.js)",
+      "Bash(node --check src/reader.js)",
+      "Bash(node --check src/auth.js)",
+      "Bash(node --check routes/query.js)",
+      "Bash(node --check routes/report.js)",
+      "Bash(node --check /root/analyst/server.js)",
+      "Bash(node --check /root/analyst/src/reader.js)",
+      "Bash(node --check /root/analyst/src/auth.js)",
+      "Bash(node --check /root/analyst/src/pptExport.js)",
+      "Bash(node --check /root/analyst/routes/query.js)",
+      "Bash(node *)",
+      "Bash(pm2 restart *)",
+      "Bash(pm2 logs *)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}
