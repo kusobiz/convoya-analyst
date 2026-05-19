@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nirvana CR — Stock Analysis</title>
+  <link rel="stylesheet" href="/css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <!-- Top Nav -->
+  <nav class="topnav">
+    <div class="topnav-inner">
+      <div class="nav-brand">
+        <div class="nav-logo">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <ellipse cx="12" cy="15" rx="3" ry="5"/>
+            <ellipse cx="7"  cy="13" rx="2.5" ry="4.5" transform="rotate(-30 7 13)"/>
+            <ellipse cx="17" cy="13" rx="2.5" ry="4.5" transform="rotate(30 17 13)"/>
+            <ellipse cx="4"  cy="10" rx="2" ry="3.5"   transform="rotate(-55 4 10)"/>
+            <ellipse cx="20" cy="10" rx="2" ry="3.5"   transform="rotate(55 20 10)"/>
+          </svg>
+        </div>
+        <div>
+          <div class="nav-title">Nirvana Asia Group</div>
+          <div class="nav-sub">Central Region · Stock Analysis</div>
+        </div>
+      </div>
+      <div class="nav-right">
+        <span class="ytd-badge" id="ytdBadge">YTD —</span>
+        <button class="btn-logout" onclick="logout()">Logout</button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Tab Bar -->
+  <div class="tab-bar">
+    <button class="tab active" data-tab="overview">Overview</button>
+    <button class="tab" data-tab="branch">Branch</button>
+    <button class="tab" data-tab="product">Product</button>
+    <button class="tab" data-tab="bdfocus">BD Focus</button>
+    <button class="tab" data-tab="aiquery">AI Query</button>
+  </div>
+
+  <main class="main-content">
+
+    <!-- Loading overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+      <div class="spinner"></div>
+      <p>Loading stock data…</p>
+    </div>
+
+    <!-- ── TAB: Overview ── -->
+    <section class="tab-panel active" id="tab-overview">
+
+      <!-- KPI Cards -->
+      <div class="kpi-grid" id="kpiGrid">
+        <div class="kpi-card">
+          <div class="kpi-value" id="kpi-totalStock">—</div>
+          <div class="kpi-label">Total Stock</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-value" id="kpi-totalSold">—</div>
+          <div class="kpi-label">Total Sold</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-value" id="kpi-balance">—</div>
+          <div class="kpi-label">Balance Units</div>
+        </div>
+        <div class="kpi-card accent">
+          <div class="kpi-value" id="kpi-sellThrough">—</div>
+          <div class="kpi-label">Sell-through %</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-value kpi-value--sm" id="kpi-balanceValue">—</div>
+          <div class="kpi-label">Balance Value (MYR)</div>
+        </div>
+      </div>
+
+      <!-- Charts row -->
+      <div class="charts-grid">
+        <div class="chart-card chart-card--wide">
+          <h3 class="chart-title">Branch Sell-through %</h3>
+          <div class="chart-wrap">
+            <canvas id="chartBranchSellthrough"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3 class="chart-title">Balance by Product</h3>
+          <div class="chart-wrap chart-wrap--donut">
+            <canvas id="chartProductDonut"></canvas>
+          </div>
+        </div>
+        <div class="chart-card chart-card--wide">
+          <h3 class="chart-title">Stock Status Distribution</h3>
+          <div class="chart-wrap">
+            <canvas id="chartStatusBar"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── TAB: Branch ── -->
+    <section class="tab-panel" id="tab-branch">
+      <div class="charts-grid">
+        <div class="chart-card chart-card--wide">
+          <h3 class="chart-title">Sold vs Balance by Branch</h3>
+          <div class="chart-wrap">
+            <canvas id="chartBranchStacked"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="table-card">
+        <h3 class="table-title">Branch Summary</h3>
+        <div class="table-scroll">
+          <table id="tableBranch">
+            <thead>
+              <tr>
+                <th>Branch</th>
+                <th>Stock</th>
+                <th>Sold</th>
+                <th>Balance</th>
+                <th>Balance Value</th>
+                <th>Sell-through</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── TAB: Product ── -->
+    <section class="tab-panel" id="tab-product">
+      <div class="charts-grid">
+        <div class="chart-card chart-card--wide">
+          <h3 class="chart-title">Product Sell-through % (Best → Worst)</h3>
+          <div class="chart-wrap chart-wrap--hbar">
+            <canvas id="chartProductBar"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="table-card">
+        <h3 class="table-title">Product Summary</h3>
+        <div class="table-scroll">
+          <table id="tableProduct">
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th>Stock</th>
+                <th>Sold</th>
+                <th>Balance</th>
+                <th>Sell-through</th>
+                <th>Velocity</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── TAB: BD Focus ── -->
+    <section class="tab-panel" id="tab-bdfocus">
+      <div class="bd-summary" id="bdSummaryNote"></div>
+      <div class="table-card">
+        <h3 class="table-title">BD Focus Zone Detail</h3>
+        <div class="table-scroll">
+          <table id="tableBDFocus">
+            <thead>
+              <tr>
+                <th>Branch</th>
+                <th>Balance Units</th>
+                <th>Balance Value</th>
+                <th>Avg Value / Unit</th>
+                <th>Priority</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Report buttons -->
+      <div class="report-bar">
+        <h3 class="chart-title" style="margin-bottom:0.75rem">Generate Report</h3>
+        <div class="report-btns">
+          <button class="btn-report" onclick="downloadReport('standard')">
+            <span>&#128196;</span> Standard Monthly
+          </button>
+          <button class="btn-report" onclick="downloadReport('bd_focus')">
+            <span>&#127919;</span> BD Focus Report
+          </button>
+          <button class="btn-report" onclick="downloadReport('product')">
+            <span>&#128202;</span> Product Report
+          </button>
+        </div>
+        <div class="branch-report-row">
+          <select id="branchSelect" class="branch-select">
+            <option value="">Select branch…</option>
+            <option>KL</option><option>SA</option><option>GX</option>
+            <option>SE</option><option>IJ</option><option>IP</option>
+            <option>KR</option><option>KN</option>
+          </select>
+          <button class="btn-report" onclick="downloadBranchReport()">
+            <span>&#127970;</span> Branch Deep Dive
+          </button>
+        </div>
+        <div class="report-status" id="reportStatus"></div>
+      </div>
+    </section>
+
+    <!-- ── TAB: AI Query ── -->
+    <section class="tab-panel" id="tab-aiquery">
+      <div class="query-layout">
+        <div class="quick-prompts" id="quickPrompts">
+          <button class="chip" data-q="Which branch has the lowest balance stock right now?">Lowest balance by branch</button>
+          <button class="chip" data-q="Which product is moving the slowest and what could be done about it?">Slowest moving product</button>
+          <button class="chip" data-q="Give me a management summary of overall stock health for the Central Region.">Management summary</button>
+          <button class="chip" data-q="Suggest a marketing strategy specifically for the KN and KR branches.">Marketing strategy: KN &amp; KR</button>
+          <button class="chip" data-q="Which BD Focus zone is most urgent and what immediate actions should be taken?">Most urgent BD Focus zone</button>
+          <button class="chip" data-q="Compare the top 3 performing branches against the bottom 3 and explain the gap.">Top 3 vs bottom 3 branches</button>
+        </div>
+
+        <div class="chat-window" id="chatWindow">
+          <div class="chat-welcome">
+            <p>&#129302; Ask me anything about the Central Region stock data.</p>
+            <p>Use the quick prompts above or type your own question below.</p>
+          </div>
+        </div>
+
+        <div class="chat-input-row">
+          <textarea
+            id="chatInput"
+            class="chat-input"
+            rows="1"
+            placeholder="Ask a question about stock, branches, products…"
+          ></textarea>
+          <button class="btn-send" id="btnSend" onclick="sendQuery()">Send</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="/js/dashboard.js"></script>
+  <script src="/js/query.js"></script>
+
+  <script>
+    // Tab switching
+    document.querySelectorAll('.tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      });
+    });
+
+    async function logout() {
+      await fetch('/api/logout', { method: 'POST' });
+      window.location.href = '/login';
+    }
+
+    async function downloadReport(type, branchFilter) {
+      const status = document.getElementById('reportStatus');
+      status.textContent = 'Generating report… this may take 30–60 seconds.';
+      status.className = 'report-status report-status--info';
+      try {
+        const body = { reportType: type };
+        if (branchFilter) body.branchFilter = branchFilter;
+        const res = await fetch('/api/report', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Report failed');
+        }
+        const blob = await res.blob();
+        const cd = res.headers.get('Content-Disposition') || '';
+        const filename = cd.match(/filename="(.+?)"/)?.[1] || 'report.pptx';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename; a.click();
+        URL.revokeObjectURL(url);
+        status.textContent = 'Report downloaded successfully.';
+        status.className = 'report-status report-status--ok';
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'report-status report-status--err';
+      }
+    }
+
+    function downloadBranchReport() {
+      const branch = document.getElementById('branchSelect').value;
+      if (!branch) { alert('Please select a branch.'); return; }
+      downloadReport('branch', branch);
+    }
+  </script>
+
+</body>
+</html>
