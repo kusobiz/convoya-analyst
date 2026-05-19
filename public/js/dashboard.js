@@ -42,7 +42,7 @@ function velocityBadge(pct) {
 }
 
 function fmt(n) {
-  return Number(n).toLocaleString('en-MY', { maximumFractionDigits: 0 });
+  return Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
 }
 
 function myr(n) {
@@ -356,7 +356,7 @@ function renderYTDBadge() {
   const el = document.getElementById('ytdBadge');
   if (!el) return;
   const now = new Date();
-  const label = now.toLocaleString('en-MY', { month: 'long', year: 'numeric' });
+  const label = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
   el.textContent = 'YTD ' + label;
 }
 
@@ -366,26 +366,24 @@ async function initDashboard() {
     const res = await fetch('/api/data');
     if (!res.ok) throw new Error('Failed to load data');
     const d = await res.json();
+    console.log(d);
 
-    renderYTDBadge();
-    renderKPIs(d.overview);
+    const call = (name, fn) => {
+      try { fn(); }
+      catch (e) { console.error(`[dashboard] ${name} threw:`, e, '\ndata:', d); throw e; }
+    };
 
-    // Overview charts
-    renderBranchSellthroughChart(d.branches);
-    renderProductDonut(d.products);
-    renderStatusBar(d.statuses);
-
-    // Branch tab
-    renderBranchStackedChart(d.branches);
-    renderBranchTable(d.branches);
-
-    // Product tab
-    renderProductHBar(d.products);
-    renderProductTable(d.products);
-
-    // BD Focus tab
-    renderBDSummary(d.bdFocus);
-    renderBDFocusTable(d.bdFocus);
+    call('renderYTDBadge',              () => renderYTDBadge());
+    call('renderKPIs',                  () => renderKPIs(d.overview));
+    call('renderBranchSellthroughChart',() => renderBranchSellthroughChart(d.branches));
+    call('renderProductDonut',          () => renderProductDonut(d.products));
+    call('renderStatusBar',             () => renderStatusBar(d.statuses));
+    call('renderBranchStackedChart',    () => renderBranchStackedChart(d.branches));
+    call('renderBranchTable',           () => renderBranchTable(d.branches));
+    call('renderProductHBar',           () => renderProductHBar(d.products));
+    call('renderProductTable',          () => renderProductTable(d.products));
+    call('renderBDSummary',             () => renderBDSummary(d.bdFocus));
+    call('renderBDFocusTable',          () => renderBDFocusTable(d.bdFocus));
 
     document.getElementById('loadingOverlay')?.classList.add('hidden');
   } catch (err) {
