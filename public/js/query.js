@@ -105,7 +105,9 @@ async function sendQuery() {
 
     removeAnalysing();
 
-    if (!res.ok) {
+    if (res.status === 401 || res.redirected || res.url.includes('/login')) {
+      appendMessage('ai', 'Session expired — please log in again.', true);
+    } else if (!res.ok) {
       const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
       appendMessage('ai', `Error: ${err.error || 'Unknown error'}`, true);
     } else {

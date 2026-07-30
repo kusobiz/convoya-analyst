@@ -41,6 +41,7 @@
     <button class="tab" data-tab="product">Product</button>
     <button class="tab" data-tab="bdfocus">BD Focus</button>
     <button class="tab" data-tab="aiquery">AI Query</button>
+    <button class="tab" data-tab="lots">Lot Drill-Down</button>
   </div>
 
   <main class="main-content">
@@ -240,6 +241,101 @@
           ></textarea>
           <button class="btn-send" id="btnSend" onclick="sendQuery()">Send</button>
         </div>
+      </div>
+    </section>
+
+    <!-- ── TAB: Lot Drill-Down ── -->
+    <section class="tab-panel" id="tab-lots">
+      <div class="table-card">
+        <h3 class="table-title">Filters</h3>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="lotBranch">Branch</label>
+            <select id="lotBranch" class="branch-select">
+              <option value="">All branches</option>
+              <option>KL</option><option>SA</option><option>GX</option>
+              <option>SE</option><option>IJ</option><option>IP</option>
+              <option>KR</option><option>KN</option>
+            </select>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="lotZone">Zone</label>
+            <select id="lotZone" class="branch-select" disabled>
+              <option value="">Select branch first</option>
+            </select>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="lotSuite">Suite No</label>
+            <select id="lotSuite" class="branch-select" disabled>
+              <option value="">Select zone first</option>
+            </select>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="lotSection">Section</label>
+            <select id="lotSection" class="branch-select" disabled>
+              <option value="">Select suite first</option>
+            </select>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="lotLevel">Level</label>
+            <select id="lotLevel" class="branch-select" disabled>
+              <option value="">Select section first</option>
+            </select>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="lotStatus">Status</label>
+            <select id="lotStatus" class="branch-select">
+              <option value="">All statuses</option>
+            </select>
+          </div>
+          <button class="btn-report" onclick="renderLotDrillDown()">
+            <span>&#128269;</span> Search
+          </button>
+          <button class="btn-report" onclick="exportLotsCSV()">
+            <span>&#11015;</span> Export CSV
+          </button>
+        </div>
+        <p class="lot-filter-help">Note: Zone and Suite No codes are system identifiers (e.g. Zone: D5, Suite No: PS9).
+          Please refer to the property map for code references.</p>
+      </div>
+
+      <div class="table-card">
+        <h3 class="table-title">Lot Results</h3>
+        <div class="table-scroll">
+          <table id="tableLots">
+            <thead>
+              <tr>
+                <th>Zone</th>
+                <th>Level</th>
+                <th>Status</th>
+                <th>Lots</th>
+                <th>Total Stock</th>
+                <th>Sold</th>
+                <th>Balance</th>
+                <th>Balance Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="8" style="text-align:center;color:var(--muted)">Set filters and click Search.</td></tr>
+            </tbody>
+            <tfoot></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <div class="table-card" id="lotMatrixCard" style="display:none;">
+        <h3 class="table-title">Zone Summary Matrix</h3>
+        <div class="matrix-header" id="matrixHeader"></div>
+        <div class="table-scroll">
+          <table id="tableLotMatrix">
+            <thead>
+              <tr id="matrixHeadRow"></tr>
+            </thead>
+            <tbody id="matrixBody"></tbody>
+            <tfoot id="matrixFoot"></tfoot>
+          </table>
+        </div>
+        <div class="matrix-kpi-row" id="matrixKpiRow"></div>
       </div>
     </section>
 

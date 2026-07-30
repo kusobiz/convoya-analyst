@@ -25,7 +25,7 @@ Node.js ESM (type: module in package.json) · Express · xlsx · pptxgenjs · Ch
 - Key from .env CLAUDE_API_KEY
 
 ## Ports & process
-- App runs on PORT=3000
+- App runs on PORT=3001 (set in .env)
 - PM2 process name: analyst
 - Nginx reverse proxy → analyst.convoya.ai (SSL via Certbot)
 

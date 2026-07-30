@@ -360,10 +360,391 @@ function renderYTDBadge() {
   el.textContent = 'YTD ' + label;
 }
 
+// ── Lot Drill-Down ──
+let lastLotRows = [];
+
+function lotStatusBadgeClass(status) {
+  return { OPEN: 'badge--red', CONFIRMED: 'badge--green', EXERCISED: 'badge--blue', HOLD: 'badge--amber' }[status] || 'badge--navy';
+}
+
+function sumLotRows(rows) {
+  return rows.reduce((acc, r) => {
+    acc.lotCount += r.lotCount;
+    acc.totalStock += r.totalStock;
+    acc.totalSold += r.totalSold;
+    acc.totalBalance += r.totalBalance;
+    acc.totalBalanceAmount += r.totalBalanceAmount;
+    return acc;
+  }, { lotCount: 0, totalStock: 0, totalSold: 0, totalBalance: 0, totalBalanceAmount: 0 });
+}
+
+async function renderLotDrillDown() {
+  const tbody = document.querySelector('#tableLots tbody');
+  const tfoot = document.querySelector('#tableLots tfoot');
+  if (!tbody) return;
+
+  const body = {
+    branch:  document.getElementById('lotBranch')?.value.trim(),
+    zone:    document.getElementById('lotZone')?.value.trim(),
+    suiteNo: document.getElementById('lotSuite')?.value.trim(),
+    section: document.getElementById('lotSection')?.value.trim(),
+    level:   document.getElementById('lotLevel')?.value.trim(),
+    status:  document.getElementById('lotStatus')?.value.trim(),
+  };
+
+  tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
+  if (tfoot) tfoot.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/lots', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (res.status === 401 || res.redirected || res.url.includes('/login')) {
+      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--red)">Session expired — please log in again.</td></tr>`;
+      return;
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(err.error || 'Failed to load lot data');
+    }
+
+    const { rows } = await res.json();
+    lastLotRows = rows;
+    const matrixCtx = { branch: body.branch, zone: body.zone, suite: body.suiteNo };
+
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--muted)">No lots match these filters.</td></tr>`;
+      renderLotMatrix([], matrixCtx);
+      return;
+    }
+
+    tbody.innerHTML = rows.map(r => `<tr>
+      <td>${r.zone}</td>
+      <td>${r.level}</td>
+      <td><span class="badge ${lotStatusBadgeClass(r.status)}">${r.status}</span></td>
+      <td>${fmt(r.lotCount)}</td>
+      <td>${fmt(r.totalStock)}</td>
+      <td>${fmt(r.totalSold)}</td>
+      <td>${fmt(r.totalBalance)}</td>
+      <td>${myr(r.totalBalanceAmount)}</td>
+    </tr>`).join('');
+
+    const t = sumLotRows(rows);
+    if (tfoot) {
+      tfoot.innerHTML = `<tr class="totals-row">
+        <td colspan="3">Totals</td>
+        <td>${fmt(t.lotCount)}</td>
+        <td>${fmt(t.totalStock)}</td>
+        <td>${fmt(t.totalSold)}</td>
+        <td>${fmt(t.totalBalance)}</td>
+        <td>${myr(t.totalBalanceAmount)}</td>
+      </tr>`;
+    }
+
+    renderLotMatrix(rows, matrixCtx);
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--red)">Error: ${err.message}</td></tr>`;
+    renderLotMatrix([], {});
+  }
+}
+
+// ── Zone Summary Matrix ──
+const MATRIX_STATUS_ORDER = ['CONFIRMED', 'EXERCISED', 'OPEN', 'HOLD', 'RESERVED', 'BOOKED'];
+
+function naturalCompare(a, b) {
+  const re = /^(\d+)(.*)$/;
+  const ma = String(a).match(re);
+  const mb = String(b).match(re);
+  if (ma && mb) {
+    const na = parseInt(ma[1], 10);
+    const nb = parseInt(mb[1], 10);
+    if (na !== nb) return na - nb;
+    return ma[2].localeCompare(mb[2]);
+  }
+  return String(a).localeCompare(String(b));
+}
+
+function myrCompact(n) {
+  const num = Number(n) || 0;
+  const abs = Math.abs(num);
+  let val, suffix;
+  if (abs >= 1e9)      { val = num / 1e9; suffix = 'B'; }
+  else if (abs >= 1e6) { val = num / 1e6; suffix = 'M'; }
+  else if (abs >= 1e3) { val = num / 1e3; suffix = 'K'; }
+  else                 { val = num; suffix = ''; }
+  const formatted = suffix ? val.toFixed(1).replace(/\.0$/, '') : Math.round(val).toString();
+  return 'RM ' + formatted + suffix;
+}
+
+function matrixCellHtml(units, amount) {
+  return `<div class="matrix-cell-units">${fmt(units)} units</div><div class="matrix-cell-amount">${myrCompact(amount)}</div>`;
+}
+
+function renderLotMatrix(rows, ctx) {
+  const card = document.getElementById('lotMatrixCard');
+  if (!card) return;
+
+  if (!rows.length) {
+    card.style.display = 'none';
+    return;
+  }
+
+  const levels = Array.from(new Set(rows.map(r => r.level))).sort(naturalCompare);
+
+  const cells = {};
+  for (const status of MATRIX_STATUS_ORDER) {
+    cells[status] = {};
+    for (const level of levels) cells[status][level] = { units: 0, amount: 0 };
+  }
+  for (const r of rows) {
+    if (!cells[r.status]) continue;
+    cells[r.status][r.level].units += r.totalStock;
+    cells[r.status][r.level].amount += r.totalBalanceAmount;
+  }
+
+  const headerEl = document.getElementById('matrixHeader');
+  if (headerEl) {
+    headerEl.innerHTML = `
+      <span><strong>${ctx.branch || 'All Branches'}</strong> — Zone <strong>${ctx.zone || 'All'}</strong> — Suite <strong>${ctx.suite || 'All'}</strong></span>
+    `;
+  }
+
+  const headRow = document.getElementById('matrixHeadRow');
+  if (headRow) {
+    headRow.innerHTML = `<th>Level</th>` +
+      MATRIX_STATUS_ORDER.map(s => `<th${s === 'OPEN' ? ' class="matrix-open-col"' : ''}>${s}</th>`).join('') +
+      `<th>TOTAL</th>`;
+  }
+
+  const colTotals = {};
+  MATRIX_STATUS_ORDER.forEach(s => { colTotals[s] = { units: 0, amount: 0 }; });
+  let grandUnits = 0;
+  let grandAmount = 0;
+
+  const body = document.getElementById('matrixBody');
+  if (body) {
+    body.innerHTML = levels.map(level => {
+      let rowUnits = 0;
+      let rowAmount = 0;
+      const tds = MATRIX_STATUS_ORDER.map(status => {
+        const c = cells[status][level];
+        rowUnits += c.units;
+        rowAmount += c.amount;
+        colTotals[status].units += c.units;
+        colTotals[status].amount += c.amount;
+        const cellClass = status === 'OPEN' ? ' class="matrix-open-col"' : '';
+        return `<td${cellClass}>${matrixCellHtml(c.units, c.amount)}</td>`;
+      }).join('');
+      grandUnits += rowUnits;
+      grandAmount += rowAmount;
+      return `<tr>
+        <td><strong>${level}</strong></td>
+        ${tds}
+        <td class="matrix-total-cell">${matrixCellHtml(rowUnits, rowAmount)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  const foot = document.getElementById('matrixFoot');
+  if (foot) {
+    const tds = MATRIX_STATUS_ORDER.map(status => {
+      const cellClass = status === 'OPEN' ? ' class="matrix-open-col"' : '';
+      return `<td${cellClass}>${matrixCellHtml(colTotals[status].units, colTotals[status].amount)}</td>`;
+    }).join('');
+    foot.innerHTML = `<tr class="matrix-total-row">
+      <td>TOTAL</td>
+      ${tds}
+      <td>${matrixCellHtml(grandUnits, grandAmount)}</td>
+    </tr>`;
+  }
+
+  const totalUnits = rows.reduce((s, r) => s + r.totalStock, 0);
+  const totalSold  = rows.reduce((s, r) => s + r.totalSold, 0);
+  const totalUnsoldOpen = rows.filter(r => r.status === 'OPEN').reduce((s, r) => s + r.totalBalance, 0);
+
+  const kpiRow = document.getElementById('matrixKpiRow');
+  if (kpiRow) {
+    kpiRow.innerHTML = `
+      <div class="matrix-kpi"><div class="matrix-kpi-value">${fmt(totalUnits)}</div><div class="matrix-kpi-label">Total Units</div></div>
+      <div class="matrix-kpi"><div class="matrix-kpi-value">${fmt(totalSold)}</div><div class="matrix-kpi-label">Total Sold</div></div>
+      <div class="matrix-kpi"><div class="matrix-kpi-value">${fmt(totalUnsoldOpen)}</div><div class="matrix-kpi-label">Total Unsold (OPEN)</div></div>
+    `;
+  }
+
+  card.style.display = '';
+}
+
+function exportLotsCSV() {
+  if (!lastLotRows.length) { alert('No data to export. Run a search first.'); return; }
+  const header = ['Zone', 'Level', 'Status', 'Lots', 'Total Stock', 'Sold', 'Balance', 'Balance Value'];
+  const lines = [header.join(',')];
+  for (const r of lastLotRows) {
+    lines.push([r.zone, r.level, r.status, r.lotCount, r.totalStock, r.totalSold, r.totalBalance, r.totalBalanceAmount]
+      .map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `lot_drilldown_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Cascading filters: Branch → Zone → Suite No → Section → Level ──
+function resetSelect(id, placeholder, disabled) {
+  const select = document.getElementById(id);
+  if (!select) return;
+  select.innerHTML = `<option value="">${placeholder}</option>`;
+  select.disabled = disabled;
+}
+
+function populateSelect(id, values, placeholder, disabled = false) {
+  const select = document.getElementById(id);
+  if (!select) return;
+  select.innerHTML = `<option value="">${placeholder}</option>` +
+    values.map(v => `<option value="${v}">${v}</option>`).join('');
+  select.disabled = disabled;
+}
+
+async function fetchLotZones(branch) {
+  try {
+    const res = await fetch(`/api/lots/zones?branch=${encodeURIComponent(branch)}`);
+    if (!res.ok) return [];
+    const { zones } = await res.json();
+    return zones;
+  } catch (e) {
+    console.error('[dashboard] fetchLotZones failed:', e);
+    return [];
+  }
+}
+
+async function fetchLotSuites(branch, zone) {
+  try {
+    const res = await fetch(`/api/lots/suites?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}`);
+    if (!res.ok) return { suites: [], statuses: [] };
+    return await res.json();
+  } catch (e) {
+    console.error('[dashboard] fetchLotSuites failed:', e);
+    return { suites: [], statuses: [] };
+  }
+}
+
+async function fetchLotSections(branch, zone, suiteNo) {
+  try {
+    const res = await fetch(`/api/lots/sections?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}&suiteNo=${encodeURIComponent(suiteNo)}`);
+    if (!res.ok) return { sections: [], statuses: [] };
+    return await res.json();
+  } catch (e) {
+    console.error('[dashboard] fetchLotSections failed:', e);
+    return { sections: [], statuses: [] };
+  }
+}
+
+async function fetchLotLevels(branch, zone, suiteNo, section) {
+  try {
+    const res = await fetch(`/api/lots/levels?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}&suiteNo=${encodeURIComponent(suiteNo)}&section=${encodeURIComponent(section)}`);
+    if (!res.ok) return { levels: [], statuses: [] };
+    return await res.json();
+  } catch (e) {
+    console.error('[dashboard] fetchLotLevels failed:', e);
+    return { levels: [], statuses: [] };
+  }
+}
+
+async function onLotBranchChange() {
+  const branch = document.getElementById('lotBranch')?.value.trim();
+
+  resetSelect('lotZone',    branch ? 'Select zone' : 'Select branch first', true);
+  resetSelect('lotSuite',   'Select zone first', true);
+  resetSelect('lotSection', 'Select suite first', true);
+  resetSelect('lotLevel',   'Select section first', true);
+  resetSelect('lotStatus',  'All statuses', false);
+
+  if (!branch) return;
+
+  const zones = await fetchLotZones(branch);
+  populateSelect('lotZone', zones, 'Select zone', false);
+}
+
+async function onLotZoneChange() {
+  const branch = document.getElementById('lotBranch')?.value.trim();
+  const zone   = document.getElementById('lotZone')?.value.trim();
+
+  resetSelect('lotSuite',   zone ? 'Select suite' : 'Select zone first', !zone);
+  resetSelect('lotSection', 'Select suite first', true);
+  resetSelect('lotLevel',   'Select section first', true);
+
+  if (!zone) return;
+
+  const { suites, statuses } = await fetchLotSuites(branch, zone);
+  populateSelect('lotSuite',  suites,   'Select suite', false);
+  populateSelect('lotStatus', statuses, 'All statuses', false);
+}
+
+async function onLotSuiteChange() {
+  const branch  = document.getElementById('lotBranch')?.value.trim();
+  const zone    = document.getElementById('lotZone')?.value.trim();
+  const suiteNo = document.getElementById('lotSuite')?.value.trim();
+
+  resetSelect('lotSection', suiteNo ? 'Select section' : 'Select suite first', !suiteNo);
+  resetSelect('lotLevel',   'Select section first', true);
+
+  if (!suiteNo) return;
+
+  const { sections, statuses } = await fetchLotSections(branch, zone, suiteNo);
+  populateSelect('lotSection', sections, 'Select section', false);
+  populateSelect('lotStatus',  statuses, 'All statuses', false);
+}
+
+async function onLotSectionChange() {
+  const branch  = document.getElementById('lotBranch')?.value.trim();
+  const zone    = document.getElementById('lotZone')?.value.trim();
+  const suiteNo = document.getElementById('lotSuite')?.value.trim();
+  const section = document.getElementById('lotSection')?.value.trim();
+
+  resetSelect('lotLevel', section ? 'Select level' : 'Select section first', !section);
+
+  if (!section) return;
+
+  const { levels, statuses } = await fetchLotLevels(branch, zone, suiteNo, section);
+  populateSelect('lotLevel',  levels,   'Select level', false);
+  populateSelect('lotStatus', statuses, 'All statuses', false);
+}
+
+document.getElementById('lotBranch')?.addEventListener('change', onLotBranchChange);
+document.getElementById('lotZone')?.addEventListener('change', onLotZoneChange);
+document.getElementById('lotSuite')?.addEventListener('change', onLotSuiteChange);
+document.getElementById('lotSection')?.addEventListener('change', onLotSectionChange);
+
+window.renderLotDrillDown = renderLotDrillDown;
+window.exportLotsCSV = exportLotsCSV;
+
+// ── Session expiry ──
+function showSessionExpired() {
+  const overlay = document.getElementById('loadingOverlay');
+  if (!overlay) return;
+  overlay.classList.remove('hidden');
+  overlay.innerHTML = `
+    <p style="color:#1A2C5B;font-weight:600;">Your session has expired. Please log in again.</p>
+    <button id="btnReLogin" style="margin-top:1rem;padding:0.6rem 1.25rem;background:#1A2C5B;color:#fff;border:none;border-radius:7px;cursor:pointer;font-weight:600;font-size:0.9rem;">Log In Again</button>
+  `;
+  document.getElementById('btnReLogin')?.addEventListener('click', () => {
+    window.location.href = '/login';
+  });
+}
+
 // ── Bootstrap ──
 async function initDashboard() {
   try {
     const res = await fetch('/api/data');
+    if (res.status === 401 || res.redirected || res.url.includes('/login')) {
+      showSessionExpired();
+      return;
+    }
     if (!res.ok) throw new Error('Failed to load data');
     const d = await res.json();
     console.log(d);

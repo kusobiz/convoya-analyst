@@ -17,6 +17,7 @@ import {
 } from './src/reader.js';
 import queryRouter from './routes/query.js';
 import reportRouter from './routes/report.js';
+import lotsRouter from './routes/lots.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -76,6 +77,7 @@ app.get('/api/refresh', (req, res) => {
 
 app.use('/api/query', queryRouter);
 app.use('/api/report', reportRouter);
+app.use('/api/lots', lotsRouter);
 
 app.listen(PORT, () => {
   console.log(`analyst running on http://localhost:${PORT}`);
