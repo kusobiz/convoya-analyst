@@ -12,14 +12,28 @@ function getDb() {
   return db;
 }
 
-// Location hierarchy: Branch → Zone → Suite No → Section → Level No
+// Structured types carry Section/Suite/Level; flat land types have no vertical structure.
+const STRUCTURED_TYPES = ['NV Niche', 'NV Pedestal', 'NV Pet Niche', 'NV EBL', 'NV Baby Paradise'];
+const FLAT_TYPES = ['NV Burial Plot', 'NV Seed', 'NV Urn Burial Plot', 'NV Pet Burial Plot'];
+
+export function classifyMaterialType(materialType) {
+  if (!materialType) return null;
+  const norm = String(materialType).trim().toLowerCase();
+  if (STRUCTURED_TYPES.some(t => t.toLowerCase() === norm)) return 'structured';
+  if (FLAT_TYPES.some(t => t.toLowerCase() === norm)) return 'flat';
+  return null;
+}
+
+// Location hierarchy: Material Type → Branch → Zone → Suite No → Section → Level No / Lot Type
 const FILTER_COLUMNS = {
-  branch:  'Branch',
-  zone:    'Zone',
-  suiteNo: 'Suite No',
-  section: 'Section',
-  level:   'Level No',
-  status:  'Status',
+  materialType: 'Material Type Desc.',
+  branch:       'Branch',
+  zone:         'Zone',
+  suiteNo:      'Suite No',
+  section:      'Section',
+  level:        'Level No',
+  lotType:      'Lot Type',
+  status:       'Status',
 };
 
 function buildWhere(filters) {
@@ -40,10 +54,32 @@ function buildWhere(filters) {
 
 export function queryLots(filters = {}) {
   const { where, params } = buildWhere(filters);
+  const mode = classifyMaterialType(filters.materialType) || 'structured';
+
+  if (mode === 'flat') {
+    return getDb().prepare(`
+      SELECT
+        COALESCE(TRIM("Material Type Desc."), 'Unknown') AS materialType,
+        COALESCE(TRIM("Lot Type"), 'Unknown')      AS lotType,
+        COALESCE(UPPER(TRIM("Status")), 'UNKNOWN') AS status,
+        SUM("Total Stock Case")     AS totalStock,
+        SUM("Total Sold Case")      AS totalSold,
+        SUM("Total Balance Case")   AS totalBalance,
+        SUM("Total Balance Amount") AS totalBalanceAmount,
+        COUNT(*)                    AS lotCount
+      FROM master_stock
+      ${where}
+      GROUP BY TRIM("Material Type Desc."), TRIM("Lot Type"), UPPER(TRIM("Status"))
+      ORDER BY TRIM("Lot Type")
+    `).all(...params);
+  }
+
   return getDb().prepare(`
     SELECT
+      COALESCE(TRIM("Material Type Desc."), 'Unknown') AS materialType,
       COALESCE(TRIM("Zone"), 'Unknown')          AS zone,
       COALESCE(TRIM("Level No"), 'Unknown')      AS level,
+      COALESCE(TRIM("Lot Type"), 'Unknown')      AS lotType,
       COALESCE(UPPER(TRIM("Status")), 'UNKNOWN') AS status,
       SUM("Total Stock Case")     AS totalStock,
       SUM("Total Sold Case")      AS totalSold,
@@ -52,20 +88,9 @@ export function queryLots(filters = {}) {
       COUNT(*)                    AS lotCount
     FROM master_stock
     ${where}
-    GROUP BY TRIM("Zone"), TRIM("Level No"), UPPER(TRIM("Status"))
+    GROUP BY TRIM("Material Type Desc."), TRIM("Zone"), TRIM("Level No"), TRIM("Lot Type"), UPPER(TRIM("Status"))
     ORDER BY TRIM("Zone"), TRIM("Level No")
   `).all(...params);
-}
-
-export function getZones(branch) {
-  let sql = `SELECT DISTINCT TRIM("Zone") AS zone FROM master_stock WHERE "Zone" IS NOT NULL AND TRIM("Zone") != ''`;
-  const params = [];
-  if (branch) {
-    sql += ` AND UPPER(TRIM("Branch")) = UPPER(TRIM(?))`;
-    params.push(String(branch));
-  }
-  sql += ` ORDER BY zone`;
-  return getDb().prepare(sql).all(...params).map(r => r.zone);
 }
 
 function distinctColumn(col, whereClause, params, upper = false) {
@@ -77,31 +102,49 @@ function distinctColumn(col, whereClause, params, upper = false) {
   return getDb().prepare(sql).all(...params).map(r => r.val);
 }
 
-// Suite numbers are scoped by branch + zone (the suite itself hasn't been chosen yet).
+export function getMaterialTypes() {
+  return distinctColumn('Material Type Desc.', '', []);
+}
+
+// Zones are scoped by branch + material type.
+export function getZones(filters = {}) {
+  const { branch, materialType } = filters;
+  const { where, params } = buildWhere({ branch, materialType });
+  return distinctColumn('Zone', where, params);
+}
+
+// Suite numbers are scoped by branch + material type + zone (the suite itself hasn't been chosen yet).
 export function getSuiteNos(filters = {}) {
-  const { branch, zone } = filters;
-  const { where, params } = buildWhere({ branch, zone });
+  const { branch, zone, materialType } = filters;
+  const { where, params } = buildWhere({ branch, zone, materialType });
   return distinctColumn('Suite No', where, params);
 }
 
-// Sections are scoped by branch + zone + suite.
+// Sections are scoped by branch + material type + zone + suite.
 export function getSections(filters = {}) {
-  const { branch, zone, suiteNo } = filters;
-  const { where, params } = buildWhere({ branch, zone, suiteNo });
+  const { branch, zone, suiteNo, materialType } = filters;
+  const { where, params } = buildWhere({ branch, zone, suiteNo, materialType });
   return distinctColumn('Section', where, params);
 }
 
 // Levels are scoped by the full location cascade selected so far.
 export function getLevels(filters = {}) {
-  const { branch, zone, suiteNo, section } = filters;
-  const { where, params } = buildWhere({ branch, zone, suiteNo, section });
+  const { branch, zone, suiteNo, section, materialType } = filters;
+  const { where, params } = buildWhere({ branch, zone, suiteNo, section, materialType });
   return distinctColumn('Level No', where, params);
+}
+
+// Lot types (flat land branch) are scoped by branch + material type + zone.
+export function getLotTypes(filters = {}) {
+  const { branch, zone, materialType } = filters;
+  const { where, params } = buildWhere({ branch, zone, materialType });
+  return distinctColumn('Lot Type', where, params);
 }
 
 // Statuses are scoped by whatever of the cascade has been selected so far.
 export function getStatuses(filters = {}) {
-  const { branch, zone, suiteNo, section } = filters;
-  const { where, params } = buildWhere({ branch, zone, suiteNo, section });
+  const { branch, zone, suiteNo, section, materialType, lotType } = filters;
+  const { where, params } = buildWhere({ branch, zone, suiteNo, section, materialType, lotType });
   return distinctColumn('Status', where, params, true);
 }
 
@@ -109,17 +152,32 @@ const router = Router();
 
 router.post('/', (req, res) => {
   try {
-    const rows = queryLots(req.body || {});
-    res.json({ rows });
+    const filters = req.body || {};
+    const mode = classifyMaterialType(filters.materialType) || 'structured';
+    const rows = queryLots(filters);
+    res.json({ rows, mode });
   } catch (err) {
     console.error('Lots query error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
+// Material type list + structured/flat classification for the selected type.
+router.get('/filters', (req, res) => {
+  try {
+    const materialTypes = getMaterialTypes();
+    const mode = classifyMaterialType(req.query.materialType);
+    res.json({ materialTypes, mode });
+  } catch (err) {
+    console.error('Lot filters query error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/zones', (req, res) => {
   try {
-    const zones = getZones(req.query.branch);
+    const { branch, materialType } = req.query;
+    const zones = getZones({ branch, materialType });
     res.json({ zones });
   } catch (err) {
     console.error('Lot zones query error:', err.message);
@@ -129,9 +187,9 @@ router.get('/zones', (req, res) => {
 
 router.get('/suites', (req, res) => {
   try {
-    const { branch, zone } = req.query;
-    const suites   = getSuiteNos({ branch, zone });
-    const statuses = getStatuses({ branch, zone });
+    const { branch, zone, materialType } = req.query;
+    const suites   = getSuiteNos({ branch, zone, materialType });
+    const statuses = getStatuses({ branch, zone, materialType });
     res.json({ suites, statuses });
   } catch (err) {
     console.error('Lot suites query error:', err.message);
@@ -141,9 +199,9 @@ router.get('/suites', (req, res) => {
 
 router.get('/sections', (req, res) => {
   try {
-    const { branch, zone, suiteNo } = req.query;
-    const sections = getSections({ branch, zone, suiteNo });
-    const statuses = getStatuses({ branch, zone, suiteNo });
+    const { branch, zone, suiteNo, materialType } = req.query;
+    const sections = getSections({ branch, zone, suiteNo, materialType });
+    const statuses = getStatuses({ branch, zone, suiteNo, materialType });
     res.json({ sections, statuses });
   } catch (err) {
     console.error('Lot sections query error:', err.message);
@@ -153,12 +211,24 @@ router.get('/sections', (req, res) => {
 
 router.get('/levels', (req, res) => {
   try {
-    const { branch, zone, suiteNo, section } = req.query;
-    const levels   = getLevels({ branch, zone, suiteNo, section });
-    const statuses = getStatuses({ branch, zone, suiteNo, section });
+    const { branch, zone, suiteNo, section, materialType } = req.query;
+    const levels   = getLevels({ branch, zone, suiteNo, section, materialType });
+    const statuses = getStatuses({ branch, zone, suiteNo, section, materialType });
     res.json({ levels, statuses });
   } catch (err) {
     console.error('Lot levels query error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/lotTypes', (req, res) => {
+  try {
+    const { branch, zone, materialType } = req.query;
+    const lotTypes = getLotTypes({ branch, zone, materialType });
+    const statuses = getStatuses({ branch, zone, materialType });
+    res.json({ lotTypes, statuses });
+  } catch (err) {
+    console.error('Lot lotTypes query error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
