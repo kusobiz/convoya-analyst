@@ -6,6 +6,9 @@
   <title>Nirvana CR — Stock Analysis</title>
   <link rel="stylesheet" href="/css/style.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3/dist/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
 
@@ -319,6 +322,14 @@
             <input type="checkbox" id="matrixShowPercentage">
             Show Percentage
           </label>
+          <div class="matrix-export-actions">
+            <button class="btn-report" onclick="exportMatrixExcel()">
+              <span>&#128202;</span> Export as Excel
+            </button>
+            <button class="btn-report" onclick="exportMatrixPDF()">
+              <span>&#128196;</span> Export as PDF
+            </button>
+          </div>
         </div>
         <div class="table-scroll">
           <table id="tableLotMatrix">

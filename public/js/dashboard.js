@@ -510,6 +510,7 @@ async function renderLotDrillDown() {
     lastLotRows = [];
     lastLotMode = 'structured';
     lotSortState = { key: null, dir: 'asc' };
+    matrixSortState = { key: null, dir: 'asc' };
     renderLotsTableHead('structured');
     tbody.innerHTML = `<tr><td colspan="${lotTableColumnCount('structured')}" style="text-align:center;color:var(--muted)">Please select a Product Type to begin.</td></tr>`;
     if (tfoot) tfoot.innerHTML = '';
@@ -558,7 +559,8 @@ async function renderLotDrillDown() {
     lastLotRows = rows;
     lastLotMode = resolvedMode;
     lotSortState = { key: null, dir: 'asc' };
-    const matrixCtx = { branch: body.branch, materialType, zone: body.zone, suite: body.suiteNo || [] };
+    matrixSortState = { key: null, dir: 'asc' };
+    const matrixCtx = { branch: body.branch, materialType, zone: body.zone, suite: body.suiteNo || [], section: body.section || [] };
 
     renderLotResultsTable();
     renderLotMatrix(rows, matrixCtx, resolvedMode);
@@ -605,10 +607,85 @@ function matrixCellHtml(units, amount, opts) {
 }
 
 // Cache of the last matrix render inputs so the Show Amount / Show Percentage
-// checkboxes can re-render instantly client-side without re-querying the server.
+// checkboxes (and sort clicks) can re-render instantly client-side without re-querying.
 let lastMatrixRows = [];
 let lastMatrixCtx = {};
 let lastMatrixMode = 'structured';
+
+// key: null (default natural order) | 'GROUP' (row label, i.e. Level/Lot Type) |
+// one of MATRIX_STATUS_ORDER (that column's total) | 'TOTAL' (the row-total column).
+let matrixSortState = { key: null, dir: 'asc' };
+
+function matrixSortArrow(key) {
+  return matrixSortState.key === key
+    ? `<span class="sort-arrow">${matrixSortState.dir === 'asc' ? '▲' : '▼'}</span>`
+    : '';
+}
+
+function joinOrAll(list, allLabel) {
+  return (list && list.length) ? list.join(', ') : allLabel;
+}
+
+// Single source of truth for the matrix's aggregation/sort — used by both the on-screen
+// render and the Excel/PDF exports, so they can never drift out of sync with each other.
+function computeMatrixData(rows, mode) {
+  const showAmount = document.getElementById('matrixShowAmount')?.checked ?? true;
+  const showPercentage = document.getElementById('matrixShowPercentage')?.checked ?? false;
+
+  const groupKey = mode === 'flat' ? 'lotType' : 'level';
+  const groupLabel = mode === 'flat' ? 'Lot Type' : 'Level';
+  const groups = Array.from(new Set(rows.map(r => r[groupKey])));
+
+  const cells = {};
+  for (const status of MATRIX_STATUS_ORDER) {
+    cells[status] = {};
+    for (const group of groups) cells[status][group] = { units: 0, amount: 0 };
+  }
+  for (const r of rows) {
+    if (!cells[r.status]) continue;
+    cells[r.status][r[groupKey]].units += r.totalStock;
+    cells[r.status][r[groupKey]].amount += r.totalBalanceAmount;
+  }
+
+  // Per-group (row) totals, needed for the TOTAL column, for sorting by it, and for export.
+  const groupTotals = {};
+  const groupAmounts = {};
+  for (const group of groups) {
+    groupTotals[group] = MATRIX_STATUS_ORDER.reduce((sum, s) => sum + cells[s][group].units, 0);
+    groupAmounts[group] = MATRIX_STATUS_ORDER.reduce((sum, s) => sum + cells[s][group].amount, 0);
+  }
+
+  // Sort rows: default is natural order (e.g. Level "2" before "10"); explicit clicks can
+  // sort by the row label itself or by any column's (or the TOTAL column's) units value.
+  const { key: sortKey, dir: sortDir } = matrixSortState;
+  const sign = sortDir === 'asc' ? 1 : -1;
+  groups.sort((a, b) => {
+    let cmp;
+    if (!sortKey || sortKey === 'GROUP') cmp = naturalCompare(a, b);
+    else if (sortKey === 'TOTAL') cmp = groupTotals[a] - groupTotals[b];
+    else cmp = cells[sortKey][a].units - cells[sortKey][b].units;
+    return cmp * sign;
+  });
+
+  // Percentages are always relative to the grand total (not the row total), per spec.
+  const colTotals = {};
+  MATRIX_STATUS_ORDER.forEach(s => { colTotals[s] = { units: 0, amount: 0 }; });
+  let grandUnits = 0;
+  let grandAmount = 0;
+  for (const group of groups) {
+    for (const status of MATRIX_STATUS_ORDER) {
+      colTotals[status].units += cells[status][group].units;
+      colTotals[status].amount += cells[status][group].amount;
+    }
+    grandUnits += groupTotals[group];
+    grandAmount += groupAmounts[group];
+  }
+
+  return {
+    showAmount, showPercentage, groupKey, groupLabel, groups, cells,
+    groupTotals, groupAmounts, colTotals, grandUnits, grandAmount,
+  };
+}
 
 function renderLotMatrix(rows, ctx, mode = 'structured') {
   lastMatrixRows = rows;
@@ -624,36 +701,14 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
     return;
   }
 
-  const showAmount = document.getElementById('matrixShowAmount')?.checked ?? true;
-  const showPercentage = document.getElementById('matrixShowPercentage')?.checked ?? false;
-
-  const groupKey = mode === 'flat' ? 'lotType' : 'level';
-  const groupLabel = mode === 'flat' ? 'Lot Type' : 'Level';
-  const groups = Array.from(new Set(rows.map(r => r[groupKey]))).sort(naturalCompare);
+  const { showAmount, showPercentage, groupLabel, groups, cells, groupTotals, groupAmounts, colTotals, grandUnits, grandAmount } =
+    computeMatrixData(rows, mode);
+  const cellOpts = { showAmount, showPercentage, grandTotal: grandUnits };
 
   if (titleEl) titleEl.textContent = mode === 'flat' ? 'Lot Type Summary Matrix' : 'Zone Summary Matrix';
 
-  const cells = {};
-  for (const status of MATRIX_STATUS_ORDER) {
-    cells[status] = {};
-    for (const group of groups) cells[status][group] = { units: 0, amount: 0 };
-  }
-  for (const r of rows) {
-    if (!cells[r.status]) continue;
-    cells[r.status][r[groupKey]].units += r.totalStock;
-    cells[r.status][r[groupKey]].amount += r.totalBalanceAmount;
-  }
-
-  // Percentages are always relative to the grand total (not the row total), per spec.
-  let grandTotalUnits = 0;
-  for (const status of MATRIX_STATUS_ORDER) {
-    for (const group of groups) grandTotalUnits += cells[status][group].units;
-  }
-  const cellOpts = { showAmount, showPercentage, grandTotal: grandTotalUnits };
-
   const headerEl = document.getElementById('matrixHeader');
   if (headerEl) {
-    const joinOrAll = (list, allLabel) => (list && list.length) ? list.join(', ') : allLabel;
     const branchLabel = joinOrAll(ctx.branch, 'All Branches');
     const productLabel = joinOrAll((ctx.materialType || []).map(stripNVPrefix), 'All');
     const zoneLabel = joinOrAll(ctx.zone, 'All');
@@ -665,36 +720,28 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
 
   const headRow = document.getElementById('matrixHeadRow');
   if (headRow) {
-    headRow.innerHTML = `<th>${groupLabel}</th>` +
-      MATRIX_STATUS_ORDER.map(s => `<th${s === 'OPEN' ? ' class="matrix-open-col"' : ''}>${s}</th>`).join('') +
-      `<th>TOTAL</th>`;
+    const groupTh = `<th class="sortable-th${matrixSortState.key === 'GROUP' ? ' sorted' : ''}" data-matrix-key="GROUP">${groupLabel}${matrixSortArrow('GROUP')}</th>`;
+    const statusThs = MATRIX_STATUS_ORDER.map(s => {
+      const openClass = s === 'OPEN' ? ' matrix-open-col' : '';
+      const sortedClass = matrixSortState.key === s ? ' sorted' : '';
+      return `<th class="sortable-th${openClass}${sortedClass}" data-matrix-key="${s}">${s}${matrixSortArrow(s)}</th>`;
+    }).join('');
+    const totalTh = `<th class="sortable-th${matrixSortState.key === 'TOTAL' ? ' sorted' : ''}" data-matrix-key="TOTAL">TOTAL${matrixSortArrow('TOTAL')}</th>`;
+    headRow.innerHTML = groupTh + statusThs + totalTh;
   }
-
-  const colTotals = {};
-  MATRIX_STATUS_ORDER.forEach(s => { colTotals[s] = { units: 0, amount: 0 }; });
-  let grandUnits = 0;
-  let grandAmount = 0;
 
   const body = document.getElementById('matrixBody');
   if (body) {
     body.innerHTML = groups.map(group => {
-      let rowUnits = 0;
-      let rowAmount = 0;
       const tds = MATRIX_STATUS_ORDER.map(status => {
         const c = cells[status][group];
-        rowUnits += c.units;
-        rowAmount += c.amount;
-        colTotals[status].units += c.units;
-        colTotals[status].amount += c.amount;
         const cellClass = status === 'OPEN' ? ' class="matrix-open-col"' : '';
         return `<td${cellClass}>${matrixCellHtml(c.units, c.amount, cellOpts)}</td>`;
       }).join('');
-      grandUnits += rowUnits;
-      grandAmount += rowAmount;
       return `<tr>
         <td><strong>${group}</strong></td>
         ${tds}
-        <td class="matrix-total-cell">${matrixCellHtml(rowUnits, rowAmount, cellOpts)}</td>
+        <td class="matrix-total-cell">${matrixCellHtml(groupTotals[group], groupAmounts[group], cellOpts)}</td>
       </tr>`;
     }).join('');
   }
@@ -748,6 +795,171 @@ function exportLotsCSV() {
   a.download = `lot_drilldown_${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ── Zone/Lot Type Summary Matrix — Excel & PDF export ──
+function sanitizeForFilename(s) {
+  return String(s ?? '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function filenamePart(list) {
+  if (!list || !list.length) return 'All';
+  return sanitizeForFilename(list.join('_')) || 'All';
+}
+
+function fileTimestamp() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+// Shared labels/filename base for both export formats, built from the matrix's cached
+// filter context (lastMatrixCtx) rather than re-reading the DOM.
+function matrixExportContext() {
+  const ctx = lastMatrixCtx || {};
+  const mode = lastMatrixMode;
+  const productTypes = (ctx.materialType || []).map(stripNVPrefix);
+  const title = mode === 'flat' ? 'Lot Type Summary Matrix' : 'Zone Summary Matrix';
+  const filenameBase = [
+    'Zone_Summary',
+    filenamePart(ctx.branch),
+    filenamePart(productTypes),
+    filenamePart(ctx.zone),
+    fileTimestamp(),
+  ].join('_');
+  return {
+    ctx, mode, title, filenameBase,
+    branchLabel: joinOrAll(ctx.branch, 'All Branches'),
+    productLabel: joinOrAll(productTypes, 'All'),
+    zoneLabel: joinOrAll(ctx.zone, 'All'),
+    suiteLabel: joinOrAll(ctx.suite, 'All'),
+    sectionLabel: joinOrAll(ctx.section, 'All'),
+  };
+}
+
+function exportMatrixExcel() {
+  if (!lastMatrixRows.length) { alert('No data to export. Run a search first.'); return; }
+  if (typeof XLSX === 'undefined') { alert('Excel export library failed to load — check your connection and try again.'); return; }
+
+  const { mode, branchLabel, productLabel, zoneLabel, suiteLabel, sectionLabel, title, filenameBase } = matrixExportContext();
+  const { showAmount, showPercentage, groupLabel, groups, cells, groupTotals, groupAmounts, colTotals, grandUnits, grandAmount } =
+    computeMatrixData(lastMatrixRows, mode);
+
+  const cellText = (units, amount) => {
+    const parts = [`${fmt(units)} units`];
+    if (showAmount) parts.push(myrCompact(amount));
+    if (showPercentage) parts.push(`${(grandUnits > 0 ? (units / grandUnits) * 100 : 0).toFixed(1)}%`);
+    return parts.join(' | ');
+  };
+
+  const aoa = [
+    [title],
+    ['Branch', branchLabel],
+    ['Product Type', productLabel],
+    ['Zone', zoneLabel],
+  ];
+  if (mode === 'structured') {
+    aoa.push(['Suite No', suiteLabel]);
+    aoa.push(['Section', sectionLabel]);
+  }
+  aoa.push([]);
+  aoa.push([groupLabel, ...MATRIX_STATUS_ORDER, 'TOTAL']);
+  for (const group of groups) {
+    aoa.push([
+      group,
+      ...MATRIX_STATUS_ORDER.map(s => cellText(cells[s][group].units, cells[s][group].amount)),
+      cellText(groupTotals[group], groupAmounts[group]),
+    ]);
+  }
+  aoa.push([
+    'TOTAL',
+    ...MATRIX_STATUS_ORDER.map(s => cellText(colTotals[s].units, colTotals[s].amount)),
+    cellText(grandUnits, grandAmount),
+  ]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 14 }, ...MATRIX_STATUS_ORDER.map(() => ({ wch: 20 })), { wch: 20 }];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, mode === 'flat' ? 'Lot Type Summary' : 'Zone Summary');
+  XLSX.writeFile(wb, `${filenameBase}.xlsx`);
+}
+
+function exportMatrixPDF() {
+  if (!lastMatrixRows.length) { alert('No data to export. Run a search first.'); return; }
+  if (typeof window.jspdf === 'undefined') { alert('PDF export library failed to load — check your connection and try again.'); return; }
+
+  const { jsPDF } = window.jspdf;
+  const { mode, branchLabel, productLabel, zoneLabel, title, filenameBase } = matrixExportContext();
+  const { showAmount, showPercentage, groupLabel, groups, cells, groupTotals, groupAmounts, colTotals, grandUnits, grandAmount } =
+    computeMatrixData(lastMatrixRows, mode);
+
+  const cellText = (units, amount) => {
+    const lines = [`${fmt(units)} units`];
+    if (showAmount) lines.push(myrCompact(amount));
+    if (showPercentage) lines.push(`${(grandUnits > 0 ? (units / grandUnits) * 100 : 0).toFixed(1)}%`);
+    return lines.join('\n');
+  };
+
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+
+  doc.setFontSize(14);
+  doc.setTextColor(26, 44, 91);
+  doc.text(`${title} — ${branchLabel} — ${productLabel} — Zone ${zoneLabel}`, 40, 36);
+  doc.setFontSize(9);
+  doc.setTextColor(107, 114, 128);
+  doc.text(`Generated: ${new Date().toLocaleString()}`, 40, 52);
+
+  const head = [[groupLabel, ...MATRIX_STATUS_ORDER, 'TOTAL']];
+  const body = groups.map(group => [
+    group,
+    ...MATRIX_STATUS_ORDER.map(s => cellText(cells[s][group].units, cells[s][group].amount)),
+    cellText(groupTotals[group], groupAmounts[group]),
+  ]);
+  const foot = [[
+    'TOTAL',
+    ...MATRIX_STATUS_ORDER.map(s => cellText(colTotals[s].units, colTotals[s].amount)),
+    cellText(grandUnits, grandAmount),
+  ]];
+
+  const openColIndex = 1 + MATRIX_STATUS_ORDER.indexOf('OPEN');
+  const totalColIndex = 1 + MATRIX_STATUS_ORDER.length;
+
+  doc.autoTable({
+    startY: 66,
+    head, body, foot,
+    styles: { fontSize: 8, cellPadding: 4, valign: 'middle', halign: 'center' },
+    headStyles: { fillColor: [26, 44, 91], textColor: [255, 255, 255] },
+    footStyles: { fillColor: [219, 227, 245], textColor: [26, 44, 91], fontStyle: 'bold' },
+    columnStyles: { 0: { fontStyle: 'bold' } },
+    didParseCell(d) {
+      const isOpenCol = d.column.index === openColIndex;
+      const isTotalCol = d.column.index === totalColIndex;
+      const isFoot = d.section === 'foot';
+      const isHead = d.section === 'head';
+      // Mirrors the on-screen CSS: OPEN gets a light-blue tint everywhere (a darker
+      // blend where it meets the TOTAL row); the TOTAL column is bold-tinted in
+      // body/foot only — its header cell stays the plain navy/white header style.
+      if (isOpenCol) {
+        d.cell.styles.fillColor = isFoot ? [199, 213, 242] : [230, 241, 251];
+        d.cell.styles.textColor = [26, 44, 91];
+        if (isFoot) d.cell.styles.fontStyle = 'bold';
+      }
+      if (isTotalCol && !isHead) {
+        d.cell.styles.fillColor = [219, 227, 245];
+        d.cell.styles.textColor = [26, 44, 91];
+        d.cell.styles.fontStyle = 'bold';
+      }
+    },
+    didDrawPage() {
+      const pageHeight = doc.internal.pageSize.getHeight();
+      doc.setFontSize(8);
+      doc.setTextColor(107, 114, 128);
+      doc.text('Confidential — Nirvana Asia Group Central Region', 40, pageHeight - 18);
+    },
+  });
+
+  doc.save(`${filenameBase}.pdf`);
 }
 
 // ── Multi-select dropdown component ──
@@ -1089,10 +1301,23 @@ function rerenderCachedMatrix() {
 document.getElementById('matrixShowAmount')?.addEventListener('change', rerenderCachedMatrix);
 document.getElementById('matrixShowPercentage')?.addEventListener('change', rerenderCachedMatrix);
 
+// Delegated (survives matrixHeadRow's innerHTML being rebuilt on every render).
+document.getElementById('matrixHeadRow')?.addEventListener('click', (e) => {
+  const th = e.target.closest('th[data-matrix-key]');
+  if (!th) return;
+  const key = th.dataset.matrixKey;
+  matrixSortState = matrixSortState.key === key
+    ? { key, dir: matrixSortState.dir === 'asc' ? 'desc' : 'asc' }
+    : { key, dir: 'asc' };
+  rerenderCachedMatrix();
+});
+
 initLotFilters();
 
 window.renderLotDrillDown = renderLotDrillDown;
 window.exportLotsCSV = exportLotsCSV;
+window.exportMatrixExcel = exportMatrixExcel;
+window.exportMatrixPDF = exportMatrixPDF;
 
 // ── Session expiry ──
 function showSessionExpired() {

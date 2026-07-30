@@ -593,9 +593,15 @@ tfoot .totals-row td {
 
 .matrix-toggle-row {
   display: flex;
+  align-items: center;
   gap: 1.5rem;
   flex-wrap: wrap;
   margin-bottom: 0.9rem;
+}
+.matrix-export-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-left: auto;
 }
 .matrix-toggle {
   display: flex;
@@ -614,24 +620,58 @@ tfoot .totals-row td {
   cursor: pointer;
 }
 
+/* Consistent cell sizing so rows/columns line up regardless of how many
+   lines (units / amount / percentage) a cell is currently showing. */
+#tableLotMatrix th,
+#tableLotMatrix td {
+  min-width: 108px;
+  vertical-align: middle;
+}
+#tableLotMatrix th:first-child,
+#tableLotMatrix td:first-child {
+  min-width: 72px;
+  text-align: center;
+}
+
 .matrix-cell-units {
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
+  text-align: center;
 }
 .matrix-cell-amount {
   font-size: 0.72rem;
   color: var(--muted);
   white-space: nowrap;
+  text-align: center;
 }
 .matrix-cell-pct {
   font-size: 0.72rem;
   color: var(--blue);
   white-space: nowrap;
+  text-align: center;
 }
 
-th.matrix-open-col,
-td.matrix-open-col { background: #e8f3ff; }
+/* OPEN highlight: light blue background with dark text — the previous version
+   left text color inherited from `thead th` (white), which was unreadable
+   against the light background. */
+th.matrix-open-col {
+  background: #E6F1FB;
+  color: var(--navy);
+}
+/* Higher specificity than thead th.sortable-th:hover/.sorted's dark navy background,
+   so the OPEN column stays readable (navy-on-navy) when it's hovered or actively sorted. */
+th.matrix-open-col.sortable-th:hover,
+th.matrix-open-col.sortable-th.sorted {
+  background: #b8d4ee;
+  color: var(--navy);
+}
+td.matrix-open-col { background: #E6F1FB; }
+td.matrix-open-col .matrix-cell-units,
+td.matrix-open-col .matrix-cell-amount,
+td.matrix-open-col .matrix-cell-pct {
+  color: #1A1A2E;
+}
 tbody tr:hover td.matrix-open-col { background: #dcecfe; }
 
 td.matrix-total-cell,
@@ -642,7 +682,17 @@ tfoot .matrix-total-row td {
 }
 tfoot .matrix-total-row td .matrix-cell-amount { color: var(--navy); }
 td.matrix-open-col.matrix-total-cell,
-tfoot .matrix-total-row td.matrix-open-col { background: #c7d5f2; }
+tfoot .matrix-total-row td.matrix-open-col {
+  background: #c7d5f2;
+}
+td.matrix-open-col.matrix-total-cell .matrix-cell-units,
+td.matrix-open-col.matrix-total-cell .matrix-cell-amount,
+td.matrix-open-col.matrix-total-cell .matrix-cell-pct,
+tfoot .matrix-total-row td.matrix-open-col .matrix-cell-units,
+tfoot .matrix-total-row td.matrix-open-col .matrix-cell-amount,
+tfoot .matrix-total-row td.matrix-open-col .matrix-cell-pct {
+  color: #1A1A2E;
+}
 
 .matrix-kpi-row {
   display: flex;
