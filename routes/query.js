@@ -2,6 +2,7 @@ import { Router } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 import {
   getOverview,
+  getBranches,
   getBranchSummary,
   getProductSummary,
   getBDFocusSummary,
@@ -22,11 +23,10 @@ function pct(n) {
 }
 
 const LOT_KEYWORD_RE = /\b(zone|suite|level|lot)s?\b/i;
-const BRANCHES = ['KL', 'SA', 'GX', 'SE', 'IJ', 'IP', 'KR', 'KN'];
 
 function extractBranch(question) {
   const upper = question.toUpperCase();
-  return BRANCHES.find(b => new RegExp(`\\b${b}\\b`).test(upper));
+  return getBranches().find(b => new RegExp(`\\b${b}\\b`).test(upper));
 }
 
 function buildLotContext(question) {
@@ -49,6 +49,7 @@ ${lotTable}
 function buildSystemPrompt() {
   const overview   = getOverview();
   const branches   = getBranchSummary();
+  const branchList = getBranches();
   const products   = getProductSummary();
   const bdFocus    = getBDFocusSummary();
   const statuses   = getStatusBreakdown();
@@ -87,7 +88,7 @@ OVERVIEW KPIs:
   Sell-through: ${pct(overview.sellThrough)}
   Balance Value: ${fmt(overview.totalValue)}
 
-BRANCH SUMMARY (8 branches):
+BRANCH SUMMARY (${branchList.length} branches):
 ${branchTable}
 
 PRODUCT SUMMARY (9 products):
@@ -105,12 +106,16 @@ ${priceTable}
 DOMAIN RULES:
 - Status = OPEN means unsold/available inventory
 - BD Focus Zone = "yes" flags priority sales zones
-- Branches: KL, SA, GX, SE, IJ, IP, KR, KN (all Central Region)
+- Branches: ${branchList.join(', ')} (all Central Region)
 - Products: NV Niche, NV Burial Plot, NV Pedestal, NV Seed, NV Pet Niche, NV EBL, NV Urn Burial Plot, NV Baby Paradise, NV Pet Burial Plot
 
 RESPONSE GUIDELINES:
 - Be concise, data-driven, and action-oriented
-- Use bullet points for recommendations
+- Write like a knowledgeable colleague texting a quick answer, not a formal report
+- Do not use large # headers — at most a bold lead-in phrase to open a section
+- Do not use markdown tables for simple comparisons of a few items (3-5) — use short bullet lines instead, e.g. "• N3 — 442 units — MYR 12.8M — 52.1% sell-through"
+- Reserve tables only for genuinely tabular data with many rows
+- Bold only the single most important figure per response, not every number
 - Format all numbers with commas and MYR prefix
 - Keep responses under 400 words unless explicitly asked for a full report
 - Focus on actionable insights for sales managers`;

@@ -806,6 +806,48 @@ tfoot .matrix-total-row td.matrix-open-col {
   border-color: #f5bebe;
 }
 
+/* Rendered markdown inside AI chat bubbles */
+.chat-bubble .chat-h {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--navy);
+  margin: 0.6rem 0 0.25rem;
+}
+.chat-bubble .chat-h:first-child { margin-top: 0; }
+.chat-bubble p { margin: 0 0 0.5rem; }
+.chat-bubble p:last-child { margin-bottom: 0; }
+.chat-bubble ul { margin: 0.15rem 0 0.5rem; padding-left: 1.15rem; }
+.chat-bubble li { margin-bottom: 0.2rem; }
+.chat-bubble li:last-child { margin-bottom: 0; }
+.chat-bubble strong { color: var(--navy); }
+.chat-msg--user .chat-bubble strong { color: inherit; }
+
+.chat-bubble .chat-table-wrap {
+  overflow-x: auto;
+  margin: 0.3rem 0 0.6rem;
+}
+.chat-bubble table.chat-table {
+  width: 100%;
+  min-width: unset;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+.chat-bubble table.chat-table th,
+.chat-bubble table.chat-table td {
+  padding: 0.35rem 0.55rem;
+  text-align: left;
+  border: 1px solid var(--border);
+  white-space: normal;
+}
+.chat-bubble table.chat-table thead th {
+  background: var(--navy);
+  color: var(--white);
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+}
+.chat-bubble table.chat-table tbody tr:nth-child(even) { background: #f7f9fd; }
+
 .chat-role {
   font-size: 0.68rem;
   font-weight: 700;

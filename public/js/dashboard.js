@@ -1192,15 +1192,15 @@ function buildArrayQuery(paramsObj) {
   return qs.toString();
 }
 
-async function fetchLotMaterialTypes() {
+async function fetchLotFilters() {
   try {
     const res = await fetch('/api/lots/filters');
-    if (!res.ok) return [];
-    const { materialTypes } = await res.json();
-    return materialTypes || [];
+    if (!res.ok) return { materialTypes: [], branches: [] };
+    const { materialTypes, branches } = await res.json();
+    return { materialTypes: materialTypes || [], branches: branches || [] };
   } catch (e) {
-    console.error('[dashboard] fetchLotMaterialTypes failed:', e);
-    return [];
+    console.error('[dashboard] fetchLotFilters failed:', e);
+    return { materialTypes: [], branches: [] };
   }
 }
 
@@ -1317,6 +1317,19 @@ async function refreshLotCascade() {
   await refreshLotLocationFields();
 }
 
+// Populates the "Branch Deep Dive" report dropdown (public/index.html #branchSelect).
+function populateBranchReportSelect(branches) {
+  const select = document.getElementById('branchSelect');
+  if (!select) return;
+  select.querySelectorAll('option[value]:not([value=""])').forEach(opt => opt.remove());
+  for (const b of branches) {
+    const opt = document.createElement('option');
+    opt.value = b;
+    opt.textContent = b;
+    select.appendChild(opt);
+  }
+}
+
 function initLotFilters() {
   renderLotsTableHead('structured');
 
@@ -1324,7 +1337,6 @@ function initLotFilters() {
     placeholder: 'All branches',
     onChange: refreshLotCascade,
   });
-  lotFilters.branch.setOptions(['KL', 'SA', 'GX', 'SE', 'IJ', 'IP', 'KR', 'KN']);
 
   lotFilters.materialType = new MultiSelect('lotMaterialType', {
     placeholder: 'Select product type',
@@ -1381,7 +1393,11 @@ function initLotFilters() {
 
   applyLotModeUI(null);
 
-  fetchLotMaterialTypes().then(materialTypes => lotFilters.materialType.setOptions(materialTypes));
+  fetchLotFilters().then(({ materialTypes, branches }) => {
+    lotFilters.materialType.setOptions(materialTypes);
+    lotFilters.branch.setOptions(branches);
+    populateBranchReportSelect(branches);
+  });
 }
 
 // Delegated so re-rendering the header row's innerHTML on every sort/search doesn't lose the listener.

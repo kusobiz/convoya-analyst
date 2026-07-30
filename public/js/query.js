@@ -3,6 +3,107 @@
 let history = [];
 let isAnalysing = false;
 
+// ── Minimal markdown → HTML for AI chat bubbles ──
+// Handles just what the assistant actually produces: **bold**, - / * bullets,
+// | table | rows |, # headers, and paragraph/line breaks. Escapes HTML first
+// since this renders model output via innerHTML.
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function inlineMd(text) {
+  return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+}
+
+function isTableSeparatorLine(line) {
+  const t = line.trim();
+  return t.includes('|') && t.includes('-') && /^[\s|:-]+$/.test(t);
+}
+
+function splitTableRow(line) {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+}
+
+function renderTable(lines) {
+  const header = splitTableRow(lines[0]);
+  const bodyRows = lines.slice(2).map(splitTableRow);
+  const thead = `<tr>${header.map(h => `<th>${inlineMd(h)}</th>`).join('')}</tr>`;
+  const tbody = bodyRows
+    .map(cells => `<tr>${cells.map(c => `<td>${inlineMd(c)}</td>`).join('')}</tr>`)
+    .join('');
+  return `<div class="chat-table-wrap"><table class="chat-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+}
+
+function renderMarkdown(text) {
+  const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+  let html = '';
+  let paragraphBuf = [];
+
+  const flushParagraph = () => {
+    if (paragraphBuf.length) {
+      html += `<p>${paragraphBuf.map(inlineMd).join('<br>')}</p>`;
+      paragraphBuf = [];
+    }
+  };
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Table: a row containing "|" immediately followed by a "|---|---|" separator
+    if (line.includes('|') && i + 1 < lines.length && isTableSeparatorLine(lines[i + 1])) {
+      flushParagraph();
+      const tableLines = [line, lines[i + 1]];
+      let j = i + 2;
+      while (j < lines.length && lines[j].includes('|') && lines[j].trim() !== '') {
+        tableLines.push(lines[j]);
+        j++;
+      }
+      html += renderTable(tableLines);
+      i = j;
+      continue;
+    }
+
+    // Header: # / ## / ### etc.
+    const headerMatch = /^\s{0,3}(#{1,6})\s+(.*)$/.exec(line);
+    if (headerMatch) {
+      flushParagraph();
+      html += `<div class="chat-h">${inlineMd(headerMatch[2])}</div>`;
+      i++;
+      continue;
+    }
+
+    // Bullet list: consecutive lines starting with - or *
+    if (/^\s*[-*•]\s+(.*)$/.test(line)) {
+      flushParagraph();
+      const items = [];
+      while (i < lines.length) {
+        const m = /^\s*[-*•]\s+(.*)$/.exec(lines[i]);
+        if (!m) break;
+        items.push(m[1]);
+        i++;
+      }
+      html += `<ul>${items.map(it => `<li>${inlineMd(it)}</li>`).join('')}</ul>`;
+      continue;
+    }
+
+    // Blank line ends the current paragraph
+    if (line.trim() === '') {
+      flushParagraph();
+      i++;
+      continue;
+    }
+
+    paragraphBuf.push(line);
+    i++;
+  }
+  flushParagraph();
+  return html;
+}
+
 const chatWindow  = document.getElementById('chatWindow');
 const chatInput   = document.getElementById('chatInput');
 const btnSend     = document.getElementById('btnSend');
@@ -54,7 +155,11 @@ function appendMessage(role, content, isError = false) {
 
   const bubble = document.createElement('div');
   bubble.className = 'chat-bubble';
-  bubble.textContent = content;
+  if (role === 'ai' && !isError) {
+    bubble.innerHTML = renderMarkdown(content);
+  } else {
+    bubble.textContent = content;
+  }
 
   wrapper.appendChild(roleLabel);
   wrapper.appendChild(bubble);
