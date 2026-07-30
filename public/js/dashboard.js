@@ -510,7 +510,7 @@ async function renderLotDrillDown() {
     lastLotRows = [];
     lastLotMode = 'structured';
     lotSortState = { key: null, dir: 'asc' };
-    matrixSortState = { key: null, dir: 'asc' };
+    matrixSortState = { key: null, dir: 'desc' };
     renderLotsTableHead('structured');
     tbody.innerHTML = `<tr><td colspan="${lotTableColumnCount('structured')}" style="text-align:center;color:var(--muted)">Please select a Product Type to begin.</td></tr>`;
     if (tfoot) tfoot.innerHTML = '';
@@ -559,7 +559,9 @@ async function renderLotDrillDown() {
     lastLotRows = rows;
     lastLotMode = resolvedMode;
     lotSortState = { key: null, dir: 'asc' };
-    matrixSortState = { key: null, dir: 'asc' };
+    // Default matrix view: newest/highest Level first. Lot Type (flat land) rows
+    // have no such ordering, so they keep the natural ascending default.
+    matrixSortState = { key: null, dir: resolvedMode === 'flat' ? 'asc' : 'desc' };
     const matrixCtx = { branch: body.branch, materialType, zone: body.zone, suite: body.suiteNo || [], section: body.section || [] };
 
     renderLotResultsTable();
@@ -1192,9 +1194,9 @@ function buildArrayQuery(paramsObj) {
   return qs.toString();
 }
 
-async function fetchLotFilters() {
+async function fetchLotFilters(branch) {
   try {
-    const res = await fetch('/api/lots/filters');
+    const res = await fetch(`/api/lots/filters?${buildArrayQuery({ branch })}`);
     if (!res.ok) return { materialTypes: [], branches: [] };
     const { materialTypes, branches } = await res.json();
     return { materialTypes: materialTypes || [], branches: branches || [] };
@@ -1296,6 +1298,13 @@ async function refreshLotLocationFields() {
 }
 
 async function refreshLotCascade() {
+  const branch = lotFilters.branch.getValues();
+
+  // Product Type is scoped to the selected Branch(es) — re-narrow it (and drop any
+  // selected type that's no longer valid for this branch) before deriving mode from it.
+  const { materialTypes } = await fetchLotFilters(branch);
+  lotFilters.materialType.setOptions(materialTypes);
+
   const materialType = lotFilters.materialType.getValues();
   const mode = modeForSelection(materialType);
   applyLotModeUI(mode);
@@ -1310,7 +1319,6 @@ async function refreshLotCascade() {
   }
   gated.forEach(f => f.setDisabled(false));
 
-  const branch = lotFilters.branch.getValues();
   const zones = await fetchLotZones(branch, materialType);
   lotFilters.zone.setOptions(zones);
 

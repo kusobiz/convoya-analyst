@@ -123,8 +123,11 @@ function distinctColumn(col, whereClause, params, upper = false) {
   return getDb().prepare(sql).all(...params).map(r => r.val);
 }
 
-export function getMaterialTypes() {
-  return distinctColumn('Material Type Desc.', '', []);
+// Material types are scoped by branch (the only filter chosen before this one in the cascade).
+export function getMaterialTypes(filters = {}) {
+  const { branch } = filters;
+  const { where, params } = buildWhere({ branch });
+  return distinctColumn('Material Type Desc.', where, params);
 }
 
 export function getBranches() {
@@ -187,10 +190,11 @@ router.post('/', (req, res) => {
   }
 });
 
-// Material type + branch lists, and structured/flat classification for the selected type(s).
+// Material type (scoped by branch) + branch lists, and structured/flat classification for the selected type(s).
 router.get('/filters', (req, res) => {
   try {
-    const materialTypes = getMaterialTypes();
+    const { branch } = req.query;
+    const materialTypes = getMaterialTypes({ branch });
     const branches = getBranches();
     const mode = classifyMaterialTypes(req.query.materialType);
     res.json({ materialTypes, branches, mode });
