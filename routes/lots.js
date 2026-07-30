@@ -24,6 +24,23 @@ export function classifyMaterialType(materialType) {
   return null;
 }
 
+// Multi-select product type: mixing structured + flat land types falls back to the
+// structured view (it's a superset — flat rows just show 'Unknown' Zone/Level).
+// A pure flat-land selection is the only case that gets the flat view.
+export function classifyMaterialTypes(materialTypes) {
+  const list = toArray(materialTypes).map(t => String(t).trim()).filter(Boolean);
+  if (!list.length) return null;
+  const modes = new Set(list.map(classifyMaterialType));
+  if (modes.has('structured')) return 'structured';
+  if (modes.size === 1 && modes.has('flat')) return 'flat';
+  return null;
+}
+
+function toArray(val) {
+  if (val === undefined || val === null) return [];
+  return Array.isArray(val) ? val : [val];
+}
+
 // Location hierarchy: Material Type → Branch → Zone → Suite No → Section → Level No / Lot Type
 const FILTER_COLUMNS = {
   materialType: 'Material Type Desc.',
@@ -36,14 +53,18 @@ const FILTER_COLUMNS = {
   status:       'Status',
 };
 
+// Every filter accepts either a single value or an array — empty/missing means "All" (no filter).
 function buildWhere(filters) {
   const clauses = [];
   const params = [];
   for (const [key, col] of Object.entries(FILTER_COLUMNS)) {
-    const val = filters[key];
-    if (val !== undefined && val !== null && String(val).trim() !== '') {
-      clauses.push(`UPPER(TRIM("${col}")) = UPPER(TRIM(?))`);
-      params.push(String(val));
+    const list = toArray(filters[key])
+      .filter(v => v !== undefined && v !== null && String(v).trim() !== '')
+      .map(v => String(v).trim().toUpperCase());
+    if (list.length) {
+      const placeholders = list.map(() => '?').join(', ');
+      clauses.push(`UPPER(TRIM("${col}")) IN (${placeholders})`);
+      params.push(...list);
     }
   }
   return {
@@ -54,7 +75,7 @@ function buildWhere(filters) {
 
 export function queryLots(filters = {}) {
   const { where, params } = buildWhere(filters);
-  const mode = classifyMaterialType(filters.materialType) || 'structured';
+  const mode = classifyMaterialTypes(filters.materialType) || 'structured';
 
   if (mode === 'flat') {
     return getDb().prepare(`
@@ -153,7 +174,7 @@ const router = Router();
 router.post('/', (req, res) => {
   try {
     const filters = req.body || {};
-    const mode = classifyMaterialType(filters.materialType) || 'structured';
+    const mode = classifyMaterialTypes(filters.materialType) || 'structured';
     const rows = queryLots(filters);
     res.json({ rows, mode });
   } catch (err) {
@@ -162,11 +183,11 @@ router.post('/', (req, res) => {
   }
 });
 
-// Material type list + structured/flat classification for the selected type.
+// Material type list + structured/flat classification for the selected type(s).
 router.get('/filters', (req, res) => {
   try {
     const materialTypes = getMaterialTypes();
-    const mode = classifyMaterialType(req.query.materialType);
+    const mode = classifyMaterialTypes(req.query.materialType);
     res.json({ materialTypes, mode });
   } catch (err) {
     console.error('Lot filters query error:', err.message);

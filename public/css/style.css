@@ -294,6 +294,17 @@ thead th {
   letter-spacing: 0.04em;
   white-space: nowrap;
 }
+thead th.sortable-th {
+  cursor: pointer;
+  user-select: none;
+}
+thead th.sortable-th:hover { background: #24386e; }
+thead th.sortable-th.sorted { background: #24386e; }
+.sort-arrow {
+  display: inline-block;
+  margin-left: 0.3rem;
+  color: var(--gold);
+}
 tbody tr { border-bottom: 1px solid var(--border); }
 tbody tr:last-child { border-bottom: none; }
 tbody tr:hover { background: #f0f3fb; }
@@ -408,6 +419,101 @@ tbody td {
 }
 .branch-select:focus { border-color: var(--navy); }
 
+/* ── Multi-select dropdown (filters) ── */
+.ms {
+  position: relative;
+  min-width: 150px;
+}
+.ms-toggle {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1.5px solid var(--border);
+  border-radius: 7px;
+  font-size: 0.84rem;
+  color: var(--text);
+  background: var(--bg);
+  outline: none;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+.ms-toggle:focus { border-color: var(--navy); }
+.ms-toggle::after {
+  content: '▾';
+  float: right;
+  color: var(--muted);
+  margin-left: 0.5rem;
+}
+.ms.ms-disabled .ms-toggle {
+  background: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.ms-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  min-width: 220px;
+  max-width: 320px;
+  background: var(--white);
+  border: 1.5px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(26, 44, 91, 0.16);
+  overflow: hidden;
+}
+.ms-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.ms-actions button {
+  flex: 1;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--navy);
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.ms-actions button:hover { background: var(--bg); border-color: var(--navy); }
+.ms-options {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 0.3rem 0;
+}
+.ms-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.82rem;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ms-option:hover { background: var(--bg); }
+.ms-option input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--navy);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ms-empty {
+  padding: 0.6rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
 .report-status {
   margin-top: 0.75rem;
   font-size: 0.82rem;
@@ -485,6 +591,29 @@ tfoot .totals-row td {
 }
 .matrix-header strong { color: var(--gold); }
 
+.matrix-toggle-row {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.9rem;
+}
+.matrix-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--navy);
+  cursor: pointer;
+  user-select: none;
+}
+.matrix-toggle input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--navy);
+  cursor: pointer;
+}
+
 .matrix-cell-units {
   font-weight: 600;
   color: var(--text);
@@ -493,6 +622,11 @@ tfoot .totals-row td {
 .matrix-cell-amount {
   font-size: 0.72rem;
   color: var(--muted);
+  white-space: nowrap;
+}
+.matrix-cell-pct {
+  font-size: 0.72rem;
+  color: var(--blue);
   white-space: nowrap;
 }
 
@@ -504,6 +638,7 @@ td.matrix-total-cell,
 tfoot .matrix-total-row td {
   font-weight: 700;
   background: #dbe3f5;
+  text-align: center;
 }
 tfoot .matrix-total-row td .matrix-cell-amount { color: var(--navy); }
 td.matrix-open-col.matrix-total-cell,
