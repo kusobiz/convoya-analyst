@@ -598,12 +598,29 @@ function myrCompact(n) {
   return 'RM ' + formatted + suffix;
 }
 
-function matrixCellHtml(units, amount, opts) {
-  const { showAmount, showPercentage, grandTotal } = opts;
-  const pctValue = grandTotal > 0 ? (units / grandTotal) * 100 : 0;
-  return `<div class="matrix-cell-units">${fmt(units)} units</div>` +
-    (showAmount     ? `<div class="matrix-cell-amount">${myrCompact(amount)}</div>` : '') +
-    (showPercentage ? `<div class="matrix-cell-pct">${pctValue.toFixed(1)}%</div>` : '');
+// Qty is always shown; Amount/% become their own columns only when their checkbox is on
+// (rather than stacked lines in one cell), on-screen and in both exports alike.
+function matrixMetrics(showAmount, showPercentage) {
+  const metrics = [{ key: 'qty', label: 'Qty' }];
+  if (showAmount) metrics.push({ key: 'amount', label: 'Amount' });
+  if (showPercentage) metrics.push({ key: 'pct', label: '%' });
+  return metrics;
+}
+
+function matrixMetricPct(units, grandTotal) {
+  return grandTotal > 0 ? (units / grandTotal) * 100 : 0;
+}
+
+// Display text for the on-screen table and the PDF (which, like the screen, favors the
+// compact "RM 8.2M" form). Excel uses raw numbers instead — see matrixMetricRawValue.
+function matrixMetricText(key, units, amount, grandTotal) {
+  if (key === 'qty') return fmt(units);
+  if (key === 'amount') return myrCompact(amount);
+  return `${matrixMetricPct(units, grandTotal).toFixed(1)}%`;
+}
+
+function matrixMetricClass(key) {
+  return key === 'qty' ? 'matrix-qty-col' : key === 'amount' ? 'matrix-amount-col' : 'matrix-pct-col';
 }
 
 // Cache of the last matrix render inputs so the Show Amount / Show Percentage
@@ -703,7 +720,8 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
 
   const { showAmount, showPercentage, groupLabel, groups, cells, groupTotals, groupAmounts, colTotals, grandUnits, grandAmount } =
     computeMatrixData(rows, mode);
-  const cellOpts = { showAmount, showPercentage, grandTotal: grandUnits };
+  const metrics = matrixMetrics(showAmount, showPercentage);
+  const metricText = (key, units, amount) => matrixMetricText(key, units, amount, grandUnits);
 
   if (titleEl) titleEl.textContent = mode === 'flat' ? 'Lot Type Summary Matrix' : 'Zone Summary Matrix';
 
@@ -720,14 +738,24 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
 
   const headRow = document.getElementById('matrixHeadRow');
   if (headRow) {
-    const groupTh = `<th class="sortable-th${matrixSortState.key === 'GROUP' ? ' sorted' : ''}" data-matrix-key="GROUP">${groupLabel}${matrixSortArrow('GROUP')}</th>`;
+    const groupTh = `<th rowspan="2" class="sortable-th${matrixSortState.key === 'GROUP' ? ' sorted' : ''}" data-matrix-key="GROUP">${groupLabel}${matrixSortArrow('GROUP')}</th>`;
     const statusThs = MATRIX_STATUS_ORDER.map(s => {
       const openClass = s === 'OPEN' ? ' matrix-open-col' : '';
       const sortedClass = matrixSortState.key === s ? ' sorted' : '';
-      return `<th class="sortable-th${openClass}${sortedClass}" data-matrix-key="${s}">${s}${matrixSortArrow(s)}</th>`;
+      return `<th colspan="${metrics.length}" class="sortable-th${openClass}${sortedClass}" data-matrix-key="${s}">${s}${matrixSortArrow(s)}</th>`;
     }).join('');
-    const totalTh = `<th class="sortable-th${matrixSortState.key === 'TOTAL' ? ' sorted' : ''}" data-matrix-key="TOTAL">TOTAL${matrixSortArrow('TOTAL')}</th>`;
+    const totalTh = `<th colspan="${metrics.length}" class="sortable-th${matrixSortState.key === 'TOTAL' ? ' sorted' : ''}" data-matrix-key="TOTAL">TOTAL${matrixSortArrow('TOTAL')}</th>`;
     headRow.innerHTML = groupTh + statusThs + totalTh;
+  }
+
+  const subHeadRow = document.getElementById('matrixSubHeadRow');
+  if (subHeadRow) {
+    const statusSubThs = MATRIX_STATUS_ORDER.map(s => {
+      const openClass = s === 'OPEN' ? ' matrix-open-col' : '';
+      return metrics.map(m => `<th class="matrix-sub-th${openClass}">${m.label}</th>`).join('');
+    }).join('');
+    const totalSubThs = metrics.map(m => `<th class="matrix-sub-th">${m.label}</th>`).join('');
+    subHeadRow.innerHTML = statusSubThs + totalSubThs;
   }
 
   const body = document.getElementById('matrixBody');
@@ -735,13 +763,16 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
     body.innerHTML = groups.map(group => {
       const tds = MATRIX_STATUS_ORDER.map(status => {
         const c = cells[status][group];
-        const cellClass = status === 'OPEN' ? ' class="matrix-open-col"' : '';
-        return `<td${cellClass}>${matrixCellHtml(c.units, c.amount, cellOpts)}</td>`;
+        const openClass = status === 'OPEN' ? ' matrix-open-col' : '';
+        return metrics.map(m => `<td class="${matrixMetricClass(m.key)}${openClass}">${metricText(m.key, c.units, c.amount)}</td>`).join('');
       }).join('');
+      const totalTds = metrics.map(m =>
+        `<td class="matrix-total-cell ${matrixMetricClass(m.key)}">${metricText(m.key, groupTotals[group], groupAmounts[group])}</td>`
+      ).join('');
       return `<tr>
         <td><strong>${group}</strong></td>
         ${tds}
-        <td class="matrix-total-cell">${matrixCellHtml(groupTotals[group], groupAmounts[group], cellOpts)}</td>
+        ${totalTds}
       </tr>`;
     }).join('');
   }
@@ -749,13 +780,14 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
   const foot = document.getElementById('matrixFoot');
   if (foot) {
     const tds = MATRIX_STATUS_ORDER.map(status => {
-      const cellClass = status === 'OPEN' ? ' class="matrix-open-col"' : '';
-      return `<td${cellClass}>${matrixCellHtml(colTotals[status].units, colTotals[status].amount, cellOpts)}</td>`;
+      const openClass = status === 'OPEN' ? ' matrix-open-col' : '';
+      return metrics.map(m => `<td class="${matrixMetricClass(m.key)}${openClass}">${metricText(m.key, colTotals[status].units, colTotals[status].amount)}</td>`).join('');
     }).join('');
+    const totalTds = metrics.map(m => `<td class="${matrixMetricClass(m.key)}">${metricText(m.key, grandUnits, grandAmount)}</td>`).join('');
     foot.innerHTML = `<tr class="matrix-total-row">
       <td>TOTAL</td>
       ${tds}
-      <td>${matrixCellHtml(grandUnits, grandAmount, cellOpts)}</td>
+      ${totalTds}
     </tr>`;
   }
 
@@ -837,6 +869,20 @@ function matrixExportContext() {
   };
 }
 
+// Raw numeric value per metric for Excel (as opposed to the compact display strings used
+// on-screen and in the PDF) — lets analysts sum/sort/filter the sheet natively.
+function matrixMetricRawValue(key, units, amount, grandTotal) {
+  if (key === 'qty') return units;
+  if (key === 'amount') return amount;
+  return Number(matrixMetricPct(units, grandTotal).toFixed(1));
+}
+
+function matrixMetricNumFmt(key) {
+  if (key === 'qty') return '#,##0';
+  if (key === 'amount') return '"RM "#,##0';
+  return '0.0"%"';
+}
+
 function exportMatrixExcel() {
   if (!lastMatrixRows.length) { alert('No data to export. Run a search first.'); return; }
   if (typeof XLSX === 'undefined') { alert('Excel export library failed to load — check your connection and try again.'); return; }
@@ -844,13 +890,8 @@ function exportMatrixExcel() {
   const { mode, branchLabel, productLabel, zoneLabel, suiteLabel, sectionLabel, title, filenameBase } = matrixExportContext();
   const { showAmount, showPercentage, groupLabel, groups, cells, groupTotals, groupAmounts, colTotals, grandUnits, grandAmount } =
     computeMatrixData(lastMatrixRows, mode);
-
-  const cellText = (units, amount) => {
-    const parts = [`${fmt(units)} units`];
-    if (showAmount) parts.push(myrCompact(amount));
-    if (showPercentage) parts.push(`${(grandUnits > 0 ? (units / grandUnits) * 100 : 0).toFixed(1)}%`);
-    return parts.join(' | ');
-  };
+  const metrics = matrixMetrics(showAmount, showPercentage);
+  const rawVal = (key, units, amount) => matrixMetricRawValue(key, units, amount, grandUnits);
 
   const aoa = [
     [title],
@@ -863,22 +904,65 @@ function exportMatrixExcel() {
     aoa.push(['Section', sectionLabel]);
   }
   aoa.push([]);
-  aoa.push([groupLabel, ...MATRIX_STATUS_ORDER, 'TOTAL']);
+
+  // Two-row header: status name spanning its Qty/Amount/% sub-columns, mirroring the
+  // on-screen table (and merged below the same way a colspan/rowspan would render it).
+  const headerRowIdx1 = aoa.length;
+  const headerRowIdx2 = headerRowIdx1 + 1;
+  const headerRow1 = [groupLabel];
+  const headerRow2 = [''];
+  MATRIX_STATUS_ORDER.forEach(s => {
+    headerRow1.push(s, ...Array(metrics.length - 1).fill(''));
+    headerRow2.push(...metrics.map(m => m.label));
+  });
+  headerRow1.push('TOTAL', ...Array(metrics.length - 1).fill(''));
+  headerRow2.push(...metrics.map(m => m.label));
+  aoa.push(headerRow1, headerRow2);
+
+  const dataRowStart = aoa.length;
   for (const group of groups) {
-    aoa.push([
-      group,
-      ...MATRIX_STATUS_ORDER.map(s => cellText(cells[s][group].units, cells[s][group].amount)),
-      cellText(groupTotals[group], groupAmounts[group]),
-    ]);
+    const row = [group];
+    MATRIX_STATUS_ORDER.forEach(s => {
+      const c = cells[s][group];
+      metrics.forEach(m => row.push(rawVal(m.key, c.units, c.amount)));
+    });
+    metrics.forEach(m => row.push(rawVal(m.key, groupTotals[group], groupAmounts[group])));
+    aoa.push(row);
   }
-  aoa.push([
-    'TOTAL',
-    ...MATRIX_STATUS_ORDER.map(s => cellText(colTotals[s].units, colTotals[s].amount)),
-    cellText(grandUnits, grandAmount),
-  ]);
+  const totalRow = ['TOTAL'];
+  MATRIX_STATUS_ORDER.forEach(s => {
+    metrics.forEach(m => totalRow.push(rawVal(m.key, colTotals[s].units, colTotals[s].amount)));
+  });
+  metrics.forEach(m => totalRow.push(rawVal(m.key, grandUnits, grandAmount)));
+  aoa.push(totalRow);
+  const dataRowEnd = aoa.length - 1;
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{ wch: 14 }, ...MATRIX_STATUS_ORDER.map(() => ({ wch: 20 })), { wch: 20 }];
+
+  const merges = [{ s: { r: headerRowIdx1, c: 0 }, e: { r: headerRowIdx2, c: 0 } }];
+  if (metrics.length > 1) {
+    let col = 1;
+    [...MATRIX_STATUS_ORDER, 'TOTAL'].forEach(() => {
+      merges.push({ s: { r: headerRowIdx1, c: col }, e: { r: headerRowIdx1, c: col + metrics.length - 1 } });
+      col += metrics.length;
+    });
+  }
+  ws['!merges'] = merges;
+
+  const totalCols = 1 + (MATRIX_STATUS_ORDER.length + 1) * metrics.length;
+  ws['!cols'] = [{ wch: 12 }, ...Array(totalCols - 1).fill({ wch: 11 })];
+
+  // Apply per-metric number formats to the data + TOTAL rows so Amount/% read naturally.
+  for (let r = dataRowStart; r <= dataRowEnd; r++) {
+    let col = 1;
+    [...MATRIX_STATUS_ORDER, 'TOTAL'].forEach(() => {
+      metrics.forEach(m => {
+        const ref = XLSX.utils.encode_cell({ r, c: col });
+        if (ws[ref]) ws[ref].z = matrixMetricNumFmt(m.key);
+        col++;
+      });
+    });
+  }
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, mode === 'flat' ? 'Lot Type Summary' : 'Zone Summary');
@@ -890,40 +974,53 @@ function exportMatrixPDF() {
   if (typeof window.jspdf === 'undefined') { alert('PDF export library failed to load — check your connection and try again.'); return; }
 
   const { jsPDF } = window.jspdf;
-  const { mode, branchLabel, productLabel, zoneLabel, title, filenameBase } = matrixExportContext();
+  const { mode, branchLabel, productLabel, zoneLabel, suiteLabel, title, filenameBase } = matrixExportContext();
   const { showAmount, showPercentage, groupLabel, groups, cells, groupTotals, groupAmounts, colTotals, grandUnits, grandAmount } =
     computeMatrixData(lastMatrixRows, mode);
-
-  const cellText = (units, amount) => {
-    const lines = [`${fmt(units)} units`];
-    if (showAmount) lines.push(myrCompact(amount));
-    if (showPercentage) lines.push(`${(grandUnits > 0 ? (units / grandUnits) * 100 : 0).toFixed(1)}%`);
-    return lines.join('\n');
-  };
+  const metrics = matrixMetrics(showAmount, showPercentage);
+  const cellText = (key, units, amount) => matrixMetricText(key, units, amount, grandUnits);
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
 
+  // Structured types carry a Suite No context (flat land has no such concept).
+  const titleText = mode === 'structured'
+    ? `${title} — ${branchLabel} — ${productLabel} — Zone ${zoneLabel} — Suite ${suiteLabel}`
+    : `${title} — ${branchLabel} — ${productLabel} — Zone ${zoneLabel}`;
+
   doc.setFontSize(14);
   doc.setTextColor(26, 44, 91);
-  doc.text(`${title} — ${branchLabel} — ${productLabel} — Zone ${zoneLabel}`, 40, 36);
+  doc.text(titleText, 40, 36);
   doc.setFontSize(9);
   doc.setTextColor(107, 114, 128);
   doc.text(`Generated: ${new Date().toLocaleString()}`, 40, 52);
 
-  const head = [[groupLabel, ...MATRIX_STATUS_ORDER, 'TOTAL']];
+  // Two-row header: status name spanning its Qty/Amount/% sub-columns.
+  const head = [
+    [
+      { content: groupLabel, rowSpan: 2 },
+      ...MATRIX_STATUS_ORDER.map(s => ({ content: s, colSpan: metrics.length })),
+      { content: 'TOTAL', colSpan: metrics.length },
+    ],
+    [
+      ...MATRIX_STATUS_ORDER.flatMap(() => metrics.map(m => m.label)),
+      ...metrics.map(m => m.label),
+    ],
+  ];
   const body = groups.map(group => [
     group,
-    ...MATRIX_STATUS_ORDER.map(s => cellText(cells[s][group].units, cells[s][group].amount)),
-    cellText(groupTotals[group], groupAmounts[group]),
+    ...MATRIX_STATUS_ORDER.flatMap(s => metrics.map(m => cellText(m.key, cells[s][group].units, cells[s][group].amount))),
+    ...metrics.map(m => cellText(m.key, groupTotals[group], groupAmounts[group])),
   ]);
   const foot = [[
     'TOTAL',
-    ...MATRIX_STATUS_ORDER.map(s => cellText(colTotals[s].units, colTotals[s].amount)),
-    cellText(grandUnits, grandAmount),
+    ...MATRIX_STATUS_ORDER.flatMap(s => metrics.map(m => cellText(m.key, colTotals[s].units, colTotals[s].amount))),
+    ...metrics.map(m => cellText(m.key, grandUnits, grandAmount)),
   ]];
 
-  const openColIndex = 1 + MATRIX_STATUS_ORDER.indexOf('OPEN');
-  const totalColIndex = 1 + MATRIX_STATUS_ORDER.length;
+  const openColStart = 1 + MATRIX_STATUS_ORDER.indexOf('OPEN') * metrics.length;
+  const openColEnd = openColStart + metrics.length - 1;
+  const totalColStart = 1 + MATRIX_STATUS_ORDER.length * metrics.length;
+  const totalColEnd = totalColStart + metrics.length - 1;
 
   doc.autoTable({
     startY: 66,
@@ -933,8 +1030,8 @@ function exportMatrixPDF() {
     footStyles: { fillColor: [219, 227, 245], textColor: [26, 44, 91], fontStyle: 'bold' },
     columnStyles: { 0: { fontStyle: 'bold' } },
     didParseCell(d) {
-      const isOpenCol = d.column.index === openColIndex;
-      const isTotalCol = d.column.index === totalColIndex;
+      const isOpenCol = d.column.index >= openColStart && d.column.index <= openColEnd;
+      const isTotalCol = d.column.index >= totalColStart && d.column.index <= totalColEnd;
       const isFoot = d.section === 'foot';
       const isHead = d.section === 'head';
       // Mirrors the on-screen CSS: OPEN gets a light-blue tint everywhere (a darker

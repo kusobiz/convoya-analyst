@@ -621,35 +621,41 @@ tfoot .totals-row td {
 }
 
 /* Consistent cell sizing so rows/columns line up regardless of how many
-   lines (units / amount / percentage) a cell is currently showing. */
+   metric sub-columns (Qty / Amount / %) a status currently has. */
 #tableLotMatrix th,
 #tableLotMatrix td {
-  min-width: 108px;
+  min-width: 68px;
   vertical-align: middle;
+  text-align: center;
 }
 #tableLotMatrix th:first-child,
 #tableLotMatrix td:first-child {
   min-width: 72px;
-  text-align: center;
 }
 
-.matrix-cell-units {
+/* Sub-header row (Qty / Amount / %) nests visually under the group headers
+   with a slightly lighter navy than the main header row. */
+th.matrix-sub-th {
+  background: #24386e;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--white);
+}
+
+td.matrix-qty-col {
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
-  text-align: center;
 }
-.matrix-cell-amount {
-  font-size: 0.72rem;
+td.matrix-amount-col {
+  font-size: 0.78rem;
   color: var(--muted);
   white-space: nowrap;
-  text-align: center;
 }
-.matrix-cell-pct {
-  font-size: 0.72rem;
+td.matrix-pct-col {
+  font-size: 0.78rem;
   color: var(--blue);
   white-space: nowrap;
-  text-align: center;
 }
 
 /* OPEN highlight: light blue background with dark text — the previous version
@@ -666,10 +672,8 @@ th.matrix-open-col.sortable-th.sorted {
   background: #b8d4ee;
   color: var(--navy);
 }
-td.matrix-open-col { background: #E6F1FB; }
-td.matrix-open-col .matrix-cell-units,
-td.matrix-open-col .matrix-cell-amount,
-td.matrix-open-col .matrix-cell-pct {
+td.matrix-open-col {
+  background: #E6F1FB;
   color: #1A1A2E;
 }
 tbody tr:hover td.matrix-open-col { background: #dcecfe; }
@@ -678,19 +682,12 @@ td.matrix-total-cell,
 tfoot .matrix-total-row td {
   font-weight: 700;
   background: #dbe3f5;
-  text-align: center;
 }
-tfoot .matrix-total-row td .matrix-cell-amount { color: var(--navy); }
+tfoot .matrix-total-row td.matrix-amount-col,
+tfoot .matrix-total-row td.matrix-pct-col { color: var(--navy); }
 td.matrix-open-col.matrix-total-cell,
 tfoot .matrix-total-row td.matrix-open-col {
   background: #c7d5f2;
-}
-td.matrix-open-col.matrix-total-cell .matrix-cell-units,
-td.matrix-open-col.matrix-total-cell .matrix-cell-amount,
-td.matrix-open-col.matrix-total-cell .matrix-cell-pct,
-tfoot .matrix-total-row td.matrix-open-col .matrix-cell-units,
-tfoot .matrix-total-row td.matrix-open-col .matrix-cell-amount,
-tfoot .matrix-total-row td.matrix-open-col .matrix-cell-pct {
   color: #1A1A2E;
 }
 
