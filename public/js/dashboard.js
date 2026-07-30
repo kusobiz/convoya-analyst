@@ -362,6 +362,23 @@ function renderYTDBadge() {
 
 // ── Lot Drill-Down ──
 let lastLotRows = [];
+let lastLotMode = 'structured';
+
+const STRUCTURED_MATERIAL_TYPES = ['NV Niche', 'NV Pedestal', 'NV Pet Niche', 'NV EBL', 'NV Baby Paradise'];
+const FLAT_MATERIAL_TYPES = ['NV Burial Plot', 'NV Seed', 'NV Urn Burial Plot', 'NV Pet Burial Plot'];
+
+function materialTypeMode(materialType) {
+  if (!materialType) return null;
+  if (STRUCTURED_MATERIAL_TYPES.includes(materialType)) return 'structured';
+  if (FLAT_MATERIAL_TYPES.includes(materialType)) return 'flat';
+  return null;
+}
+
+// Display-only: the DB's "Material Type Desc." values are all prefixed "NV ";
+// queries always use the full value, only rendering strips it.
+function stripNVPrefix(materialType) {
+  return String(materialType || '').replace(/^NV\s+/i, '');
+}
 
 function lotStatusBadgeClass(status) {
   return { OPEN: 'badge--red', CONFIRMED: 'badge--green', EXERCISED: 'badge--blue', HOLD: 'badge--amber' }[status] || 'badge--navy';
@@ -378,21 +395,52 @@ function sumLotRows(rows) {
   }, { lotCount: 0, totalStock: 0, totalSold: 0, totalBalance: 0, totalBalanceAmount: 0 });
 }
 
+function lotTableColumnCount(mode) {
+  return mode === 'flat' ? 8 : 10;
+}
+
+function renderLotsTableHead(mode) {
+  const headRow = document.getElementById('lotsHeadRow');
+  if (!headRow) return;
+  const cols = mode === 'flat'
+    ? ['Product Type', 'Lot Type', 'Status', 'Lots', 'Total Stock', 'Sold', 'Balance', 'Balance Value']
+    : ['Product Type', 'Zone', 'Level', 'Lot Type', 'Status', 'Lots', 'Total Stock', 'Sold', 'Balance', 'Balance Value'];
+  headRow.innerHTML = cols.map(c => `<th>${c}</th>`).join('');
+}
+
 async function renderLotDrillDown() {
   const tbody = document.querySelector('#tableLots tbody');
   const tfoot = document.querySelector('#tableLots tfoot');
   if (!tbody) return;
 
-  const body = {
-    branch:  document.getElementById('lotBranch')?.value.trim(),
-    zone:    document.getElementById('lotZone')?.value.trim(),
-    suiteNo: document.getElementById('lotSuite')?.value.trim(),
-    section: document.getElementById('lotSection')?.value.trim(),
-    level:   document.getElementById('lotLevel')?.value.trim(),
-    status:  document.getElementById('lotStatus')?.value.trim(),
-  };
+  const materialType = document.getElementById('lotMaterialType')?.value.trim();
+  const mode = materialTypeMode(materialType);
 
-  tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
+  if (!materialType || !mode) {
+    renderLotsTableHead('structured');
+    tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--muted)">Please select a Product Type to begin.</td></tr>`;
+    if (tfoot) tfoot.innerHTML = '';
+    renderLotMatrix([], {}, 'structured');
+    return;
+  }
+
+  const body = {
+    materialType,
+    branch: document.getElementById('lotBranch')?.value.trim(),
+    zone:   document.getElementById('lotZone')?.value.trim(),
+    status: document.getElementById('lotStatus')?.value.trim(),
+  };
+  if (mode === 'structured') {
+    body.suiteNo = document.getElementById('lotSuite')?.value.trim();
+    body.section = document.getElementById('lotSection')?.value.trim();
+    body.level   = document.getElementById('lotLevel')?.value.trim();
+  } else {
+    body.lotType = document.getElementById('lotType')?.value.trim();
+  }
+
+  renderLotsTableHead(mode);
+  const colCount = lotTableColumnCount(mode);
+  tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
   if (tfoot) tfoot.innerHTML = '';
 
   try {
@@ -403,7 +451,7 @@ async function renderLotDrillDown() {
     });
 
     if (res.status === 401 || res.redirected || res.url.includes('/login')) {
-      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--red)">Session expired — please log in again.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--red)">Session expired — please log in again.</td></tr>`;
       return;
     }
     if (!res.ok) {
@@ -411,19 +459,33 @@ async function renderLotDrillDown() {
       throw new Error(err.error || 'Failed to load lot data');
     }
 
-    const { rows } = await res.json();
+    const data = await res.json();
+    const rows = data.rows;
+    const resolvedMode = data.mode || mode;
     lastLotRows = rows;
-    const matrixCtx = { branch: body.branch, zone: body.zone, suite: body.suiteNo };
+    lastLotMode = resolvedMode;
+    const matrixCtx = { branch: body.branch, materialType, zone: body.zone, suite: body.suiteNo };
 
     if (!rows.length) {
-      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--muted)">No lots match these filters.</td></tr>`;
-      renderLotMatrix([], matrixCtx);
+      tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--muted)">No lots match these filters.</td></tr>`;
+      renderLotMatrix([], matrixCtx, resolvedMode);
       return;
     }
 
-    tbody.innerHTML = rows.map(r => `<tr>
+    tbody.innerHTML = rows.map(r => resolvedMode === 'flat' ? `<tr>
+      <td>${stripNVPrefix(r.materialType)}</td>
+      <td>${r.lotType}</td>
+      <td><span class="badge ${lotStatusBadgeClass(r.status)}">${r.status}</span></td>
+      <td>${fmt(r.lotCount)}</td>
+      <td>${fmt(r.totalStock)}</td>
+      <td>${fmt(r.totalSold)}</td>
+      <td>${fmt(r.totalBalance)}</td>
+      <td>${myr(r.totalBalanceAmount)}</td>
+    </tr>` : `<tr>
+      <td>${stripNVPrefix(r.materialType)}</td>
       <td>${r.zone}</td>
       <td>${r.level}</td>
+      <td>${r.lotType}</td>
       <td><span class="badge ${lotStatusBadgeClass(r.status)}">${r.status}</span></td>
       <td>${fmt(r.lotCount)}</td>
       <td>${fmt(r.totalStock)}</td>
@@ -433,9 +495,10 @@ async function renderLotDrillDown() {
     </tr>`).join('');
 
     const t = sumLotRows(rows);
+    const labelColspan = resolvedMode === 'flat' ? 3 : 5;
     if (tfoot) {
       tfoot.innerHTML = `<tr class="totals-row">
-        <td colspan="3">Totals</td>
+        <td colspan="${labelColspan}">Totals</td>
         <td>${fmt(t.lotCount)}</td>
         <td>${fmt(t.totalStock)}</td>
         <td>${fmt(t.totalSold)}</td>
@@ -444,10 +507,10 @@ async function renderLotDrillDown() {
       </tr>`;
     }
 
-    renderLotMatrix(rows, matrixCtx);
+    renderLotMatrix(rows, matrixCtx, resolvedMode);
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--red)">Error: ${err.message}</td></tr>`;
-    renderLotMatrix([], {});
+    tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--red)">Error: ${err.message}</td></tr>`;
+    renderLotMatrix([], {}, mode);
   }
 }
 
@@ -483,8 +546,9 @@ function matrixCellHtml(units, amount) {
   return `<div class="matrix-cell-units">${fmt(units)} units</div><div class="matrix-cell-amount">${myrCompact(amount)}</div>`;
 }
 
-function renderLotMatrix(rows, ctx) {
+function renderLotMatrix(rows, ctx, mode = 'structured') {
   const card = document.getElementById('lotMatrixCard');
+  const titleEl = document.getElementById('lotMatrixTitle');
   if (!card) return;
 
   if (!rows.length) {
@@ -492,29 +556,34 @@ function renderLotMatrix(rows, ctx) {
     return;
   }
 
-  const levels = Array.from(new Set(rows.map(r => r.level))).sort(naturalCompare);
+  const groupKey = mode === 'flat' ? 'lotType' : 'level';
+  const groupLabel = mode === 'flat' ? 'Lot Type' : 'Level';
+  const groups = Array.from(new Set(rows.map(r => r[groupKey]))).sort(naturalCompare);
+
+  if (titleEl) titleEl.textContent = mode === 'flat' ? 'Lot Type Summary Matrix' : 'Zone Summary Matrix';
 
   const cells = {};
   for (const status of MATRIX_STATUS_ORDER) {
     cells[status] = {};
-    for (const level of levels) cells[status][level] = { units: 0, amount: 0 };
+    for (const group of groups) cells[status][group] = { units: 0, amount: 0 };
   }
   for (const r of rows) {
     if (!cells[r.status]) continue;
-    cells[r.status][r.level].units += r.totalStock;
-    cells[r.status][r.level].amount += r.totalBalanceAmount;
+    cells[r.status][r[groupKey]].units += r.totalStock;
+    cells[r.status][r[groupKey]].amount += r.totalBalanceAmount;
   }
 
   const headerEl = document.getElementById('matrixHeader');
   if (headerEl) {
-    headerEl.innerHTML = `
-      <span><strong>${ctx.branch || 'All Branches'}</strong> — Zone <strong>${ctx.zone || 'All'}</strong> — Suite <strong>${ctx.suite || 'All'}</strong></span>
-    `;
+    const productLabel = stripNVPrefix(ctx.materialType);
+    headerEl.innerHTML = mode === 'flat'
+      ? `<span><strong>${ctx.branch || 'All Branches'}</strong> — <strong>${productLabel}</strong> — Lot Type Summary</span>`
+      : `<span><strong>${ctx.branch || 'All Branches'}</strong> — <strong>${productLabel}</strong> — Zone <strong>${ctx.zone || 'All'}</strong> — Suite <strong>${ctx.suite || 'All'}</strong></span>`;
   }
 
   const headRow = document.getElementById('matrixHeadRow');
   if (headRow) {
-    headRow.innerHTML = `<th>Level</th>` +
+    headRow.innerHTML = `<th>${groupLabel}</th>` +
       MATRIX_STATUS_ORDER.map(s => `<th${s === 'OPEN' ? ' class="matrix-open-col"' : ''}>${s}</th>`).join('') +
       `<th>TOTAL</th>`;
   }
@@ -526,11 +595,11 @@ function renderLotMatrix(rows, ctx) {
 
   const body = document.getElementById('matrixBody');
   if (body) {
-    body.innerHTML = levels.map(level => {
+    body.innerHTML = groups.map(group => {
       let rowUnits = 0;
       let rowAmount = 0;
       const tds = MATRIX_STATUS_ORDER.map(status => {
-        const c = cells[status][level];
+        const c = cells[status][group];
         rowUnits += c.units;
         rowAmount += c.amount;
         colTotals[status].units += c.units;
@@ -541,7 +610,7 @@ function renderLotMatrix(rows, ctx) {
       grandUnits += rowUnits;
       grandAmount += rowAmount;
       return `<tr>
-        <td><strong>${level}</strong></td>
+        <td><strong>${group}</strong></td>
         ${tds}
         <td class="matrix-total-cell">${matrixCellHtml(rowUnits, rowAmount)}</td>
       </tr>`;
@@ -579,11 +648,16 @@ function renderLotMatrix(rows, ctx) {
 
 function exportLotsCSV() {
   if (!lastLotRows.length) { alert('No data to export. Run a search first.'); return; }
-  const header = ['Zone', 'Level', 'Status', 'Lots', 'Total Stock', 'Sold', 'Balance', 'Balance Value'];
+  const isFlat = lastLotMode === 'flat';
+  const header = isFlat
+    ? ['Product Type', 'Lot Type', 'Status', 'Lots', 'Total Stock', 'Sold', 'Balance', 'Balance Value']
+    : ['Product Type', 'Zone', 'Level', 'Lot Type', 'Status', 'Lots', 'Total Stock', 'Sold', 'Balance', 'Balance Value'];
   const lines = [header.join(',')];
   for (const r of lastLotRows) {
-    lines.push([r.zone, r.level, r.status, r.lotCount, r.totalStock, r.totalSold, r.totalBalance, r.totalBalanceAmount]
-      .map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+    const fields = isFlat
+      ? [stripNVPrefix(r.materialType), r.lotType, r.status, r.lotCount, r.totalStock, r.totalSold, r.totalBalance, r.totalBalanceAmount]
+      : [stripNVPrefix(r.materialType), r.zone, r.level, r.lotType, r.status, r.lotCount, r.totalStock, r.totalSold, r.totalBalance, r.totalBalanceAmount];
+    lines.push(fields.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
   }
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -594,7 +668,7 @@ function exportLotsCSV() {
   URL.revokeObjectURL(url);
 }
 
-// ── Cascading filters: Branch → Zone → Suite No → Section → Level ──
+// ── Cascading filters: Material Type → Branch → [Zone → Suite No → Section → Level] | [Lot Type] ──
 function resetSelect(id, placeholder, disabled) {
   const select = document.getElementById(id);
   if (!select) return;
@@ -610,9 +684,33 @@ function populateSelect(id, values, placeholder, disabled = false) {
   select.disabled = disabled;
 }
 
-async function fetchLotZones(branch) {
+function applyLotModeUI(mode) {
+  document.querySelectorAll('.structured-only').forEach(el => { el.style.display = mode === 'structured' ? '' : 'none'; });
+  document.querySelectorAll('.flat-only').forEach(el => { el.style.display = mode === 'flat' ? '' : 'none'; });
+}
+
+function populateProductTypeSelect(values) {
+  const select = document.getElementById('lotMaterialType');
+  if (!select) return;
+  select.innerHTML = `<option value="">Select product type</option>` +
+    values.map(v => `<option value="${v}">${stripNVPrefix(v)}</option>`).join('');
+}
+
+async function fetchLotMaterialTypes() {
   try {
-    const res = await fetch(`/api/lots/zones?branch=${encodeURIComponent(branch)}`);
+    const res = await fetch('/api/lots/filters');
+    if (!res.ok) return [];
+    const { materialTypes } = await res.json();
+    return materialTypes || [];
+  } catch (e) {
+    console.error('[dashboard] fetchLotMaterialTypes failed:', e);
+    return [];
+  }
+}
+
+async function fetchLotZones(branch, materialType) {
+  try {
+    const res = await fetch(`/api/lots/zones?branch=${encodeURIComponent(branch)}&materialType=${encodeURIComponent(materialType)}`);
     if (!res.ok) return [];
     const { zones } = await res.json();
     return zones;
@@ -622,9 +720,9 @@ async function fetchLotZones(branch) {
   }
 }
 
-async function fetchLotSuites(branch, zone) {
+async function fetchLotSuites(branch, zone, materialType) {
   try {
-    const res = await fetch(`/api/lots/suites?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}`);
+    const res = await fetch(`/api/lots/suites?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}&materialType=${encodeURIComponent(materialType)}`);
     if (!res.ok) return { suites: [], statuses: [] };
     return await res.json();
   } catch (e) {
@@ -633,9 +731,9 @@ async function fetchLotSuites(branch, zone) {
   }
 }
 
-async function fetchLotSections(branch, zone, suiteNo) {
+async function fetchLotSections(branch, zone, suiteNo, materialType) {
   try {
-    const res = await fetch(`/api/lots/sections?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}&suiteNo=${encodeURIComponent(suiteNo)}`);
+    const res = await fetch(`/api/lots/sections?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}&suiteNo=${encodeURIComponent(suiteNo)}&materialType=${encodeURIComponent(materialType)}`);
     if (!res.ok) return { sections: [], statuses: [] };
     return await res.json();
   } catch (e) {
@@ -644,9 +742,9 @@ async function fetchLotSections(branch, zone, suiteNo) {
   }
 }
 
-async function fetchLotLevels(branch, zone, suiteNo, section) {
+async function fetchLotLevels(branch, zone, suiteNo, section, materialType) {
   try {
-    const res = await fetch(`/api/lots/levels?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}&suiteNo=${encodeURIComponent(suiteNo)}&section=${encodeURIComponent(section)}`);
+    const res = await fetch(`/api/lots/levels?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}&suiteNo=${encodeURIComponent(suiteNo)}&section=${encodeURIComponent(section)}&materialType=${encodeURIComponent(materialType)}`);
     if (!res.ok) return { levels: [], statuses: [] };
     return await res.json();
   } catch (e) {
@@ -655,47 +753,101 @@ async function fetchLotLevels(branch, zone, suiteNo, section) {
   }
 }
 
-async function onLotBranchChange() {
-  const branch = document.getElementById('lotBranch')?.value.trim();
+async function fetchLotTypes(branch, zone, materialType) {
+  try {
+    const res = await fetch(`/api/lots/lotTypes?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}&materialType=${encodeURIComponent(materialType)}`);
+    if (!res.ok) return { lotTypes: [], statuses: [] };
+    return await res.json();
+  } catch (e) {
+    console.error('[dashboard] fetchLotTypes failed:', e);
+    return { lotTypes: [], statuses: [] };
+  }
+}
 
-  resetSelect('lotZone',    branch ? 'Select zone' : 'Select branch first', true);
+// Zone is a standard filter for every product type; everything past it (Suite/Section/Level
+// for structured types, Lot Type for flat land) resets whenever Branch or Product Type changes.
+function resetLotZoneDownstream(zonePlaceholder) {
+  resetSelect('lotZone',    zonePlaceholder, true);
   resetSelect('lotSuite',   'Select zone first', true);
   resetSelect('lotSection', 'Select suite first', true);
   resetSelect('lotLevel',   'Select section first', true);
+  resetSelect('lotType',    'Select zone first', true);
   resetSelect('lotStatus',  'All statuses', false);
+}
 
-  if (!branch) return;
+async function onLotMaterialTypeChange() {
+  const materialType = document.getElementById('lotMaterialType')?.value.trim();
+  const branch = document.getElementById('lotBranch')?.value.trim();
+  const mode = materialTypeMode(materialType);
 
-  const zones = await fetchLotZones(branch);
+  applyLotModeUI(mode);
+  resetLotZoneDownstream(mode ? 'Select zone' : 'Select product type first');
+  const matrixCard = document.getElementById('lotMatrixCard');
+  if (matrixCard) matrixCard.style.display = 'none';
+
+  if (!mode) return;
+  const zones = await fetchLotZones(branch, materialType);
+  populateSelect('lotZone', zones, 'Select zone', false);
+}
+
+async function onLotBranchChange() {
+  const branch = document.getElementById('lotBranch')?.value.trim();
+  const materialType = document.getElementById('lotMaterialType')?.value.trim();
+  const mode = materialTypeMode(materialType);
+
+  resetLotZoneDownstream(mode ? 'Select zone' : 'Select product type first');
+
+  if (!mode) return;
+  const zones = await fetchLotZones(branch, materialType);
   populateSelect('lotZone', zones, 'Select zone', false);
 }
 
 async function onLotZoneChange() {
   const branch = document.getElementById('lotBranch')?.value.trim();
   const zone   = document.getElementById('lotZone')?.value.trim();
+  const materialType = document.getElementById('lotMaterialType')?.value.trim();
+  const mode = materialTypeMode(materialType);
 
-  resetSelect('lotSuite',   zone ? 'Select suite' : 'Select zone first', !zone);
   resetSelect('lotSection', 'Select suite first', true);
   resetSelect('lotLevel',   'Select section first', true);
+  resetSelect('lotSuite',   zone ? 'Select suite' : 'Select zone first', true);
+  resetSelect('lotType',    zone ? 'Select lot type' : 'Select zone first', true);
 
-  if (!zone) return;
+  if (!zone || !mode) return;
 
-  const { suites, statuses } = await fetchLotSuites(branch, zone);
-  populateSelect('lotSuite',  suites,   'Select suite', false);
-  populateSelect('lotStatus', statuses, 'All statuses', false);
+  if (mode === 'structured') {
+    const { suites, statuses } = await fetchLotSuites(branch, zone, materialType);
+    populateSelect('lotStatus', statuses, 'All statuses', false);
+
+    if (!suites.length) {
+      // Some structured types have 0% Suite No coverage for this zone/branch — skip
+      // straight to Section rather than permanently blocking the cascade.
+      resetSelect('lotSuite', 'No suite data', true);
+      const { sections, statuses: sectionStatuses } = await fetchLotSections(branch, zone, '', materialType);
+      populateSelect('lotSection', sections, 'Select section', false);
+      populateSelect('lotStatus',  sectionStatuses, 'All statuses', false);
+    } else {
+      populateSelect('lotSuite', suites, 'Select suite', false);
+    }
+  } else {
+    const { lotTypes, statuses } = await fetchLotTypes(branch, zone, materialType);
+    populateSelect('lotType', lotTypes, 'Select lot type', false);
+    populateSelect('lotStatus', statuses, 'All statuses', false);
+  }
 }
 
 async function onLotSuiteChange() {
   const branch  = document.getElementById('lotBranch')?.value.trim();
   const zone    = document.getElementById('lotZone')?.value.trim();
   const suiteNo = document.getElementById('lotSuite')?.value.trim();
+  const materialType = document.getElementById('lotMaterialType')?.value.trim();
 
   resetSelect('lotSection', suiteNo ? 'Select section' : 'Select suite first', !suiteNo);
   resetSelect('lotLevel',   'Select section first', true);
 
   if (!suiteNo) return;
 
-  const { sections, statuses } = await fetchLotSections(branch, zone, suiteNo);
+  const { sections, statuses } = await fetchLotSections(branch, zone, suiteNo, materialType);
   populateSelect('lotSection', sections, 'Select section', false);
   populateSelect('lotStatus',  statuses, 'All statuses', false);
 }
@@ -705,20 +857,31 @@ async function onLotSectionChange() {
   const zone    = document.getElementById('lotZone')?.value.trim();
   const suiteNo = document.getElementById('lotSuite')?.value.trim();
   const section = document.getElementById('lotSection')?.value.trim();
+  const materialType = document.getElementById('lotMaterialType')?.value.trim();
 
   resetSelect('lotLevel', section ? 'Select level' : 'Select section first', !section);
 
   if (!section) return;
 
-  const { levels, statuses } = await fetchLotLevels(branch, zone, suiteNo, section);
+  const { levels, statuses } = await fetchLotLevels(branch, zone, suiteNo, section, materialType);
   populateSelect('lotLevel',  levels,   'Select level', false);
   populateSelect('lotStatus', statuses, 'All statuses', false);
 }
 
+async function initLotMaterialTypeFilter() {
+  renderLotsTableHead('structured');
+  const materialTypes = await fetchLotMaterialTypes();
+  populateProductTypeSelect(materialTypes);
+  applyLotModeUI(null);
+}
+
+document.getElementById('lotMaterialType')?.addEventListener('change', onLotMaterialTypeChange);
 document.getElementById('lotBranch')?.addEventListener('change', onLotBranchChange);
 document.getElementById('lotZone')?.addEventListener('change', onLotZoneChange);
 document.getElementById('lotSuite')?.addEventListener('change', onLotSuiteChange);
 document.getElementById('lotSection')?.addEventListener('change', onLotSectionChange);
+
+initLotMaterialTypeFilter();
 
 window.renderLotDrillDown = renderLotDrillDown;
 window.exportLotsCSV = exportLotsCSV;
