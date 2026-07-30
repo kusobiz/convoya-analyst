@@ -251,54 +251,35 @@
         <div class="lot-filter-row">
           <div class="lot-filter-field">
             <label class="lot-filter-label" for="lotBranch">Branch</label>
-            <select id="lotBranch" class="branch-select">
-              <option value="">All branches</option>
-              <option>KL</option><option>SA</option><option>GX</option>
-              <option>SE</option><option>IJ</option><option>IP</option>
-              <option>KR</option><option>KN</option>
-            </select>
+            <div class="ms" id="lotBranch"></div>
           </div>
           <div class="lot-filter-field">
             <label class="lot-filter-label" for="lotMaterialType">Product Type</label>
-            <select id="lotMaterialType" class="branch-select">
-              <option value="">Select product type</option>
-            </select>
+            <div class="ms" id="lotMaterialType"></div>
           </div>
           <div class="lot-filter-field" id="fieldZone">
             <label class="lot-filter-label" for="lotZone">Zone</label>
-            <select id="lotZone" class="branch-select" disabled>
-              <option value="">Select product type first</option>
-            </select>
+            <div class="ms" id="lotZone"></div>
           </div>
           <div class="lot-filter-field structured-only" id="fieldSuite">
             <label class="lot-filter-label" for="lotSuite">Suite No</label>
-            <select id="lotSuite" class="branch-select" disabled>
-              <option value="">Select zone first</option>
-            </select>
+            <div class="ms" id="lotSuite"></div>
           </div>
           <div class="lot-filter-field structured-only" id="fieldSection">
             <label class="lot-filter-label" for="lotSection">Section</label>
-            <select id="lotSection" class="branch-select" disabled>
-              <option value="">Select suite first</option>
-            </select>
+            <div class="ms" id="lotSection"></div>
           </div>
           <div class="lot-filter-field structured-only" id="fieldLevel">
             <label class="lot-filter-label" for="lotLevel">Level</label>
-            <select id="lotLevel" class="branch-select" disabled>
-              <option value="">Select section first</option>
-            </select>
+            <div class="ms" id="lotLevel"></div>
           </div>
           <div class="lot-filter-field flat-only" id="fieldLotType" style="display:none;">
             <label class="lot-filter-label" for="lotType">Lot Type</label>
-            <select id="lotType" class="branch-select" disabled>
-              <option value="">Select zone first</option>
-            </select>
+            <div class="ms" id="lotType"></div>
           </div>
           <div class="lot-filter-field">
             <label class="lot-filter-label" for="lotStatus">Status</label>
-            <select id="lotStatus" class="branch-select">
-              <option value="">All statuses</option>
-            </select>
+            <div class="ms" id="lotStatus"></div>
           </div>
           <button class="btn-report" onclick="renderLotDrillDown()">
             <span>&#128269;</span> Search
@@ -329,6 +310,16 @@
       <div class="table-card" id="lotMatrixCard" style="display:none;">
         <h3 class="table-title" id="lotMatrixTitle">Zone Summary Matrix</h3>
         <div class="matrix-header" id="matrixHeader"></div>
+        <div class="matrix-toggle-row">
+          <label class="matrix-toggle">
+            <input type="checkbox" id="matrixShowAmount" checked>
+            Show Amount
+          </label>
+          <label class="matrix-toggle">
+            <input type="checkbox" id="matrixShowPercentage">
+            Show Percentage
+          </label>
+        </div>
         <div class="table-scroll">
           <table id="tableLotMatrix">
             <thead>

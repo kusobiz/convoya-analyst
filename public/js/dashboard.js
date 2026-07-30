@@ -395,17 +395,107 @@ function sumLotRows(rows) {
   }, { lotCount: 0, totalStock: 0, totalSold: 0, totalBalance: 0, totalBalanceAmount: 0 });
 }
 
+// Column configs drive header rendering, sorting, and body rendering together so
+// structured/flat modes and text/number sort behavior stay in one place.
+const LOT_COLUMNS = {
+  structured: [
+    { key: 'materialType',       label: 'Product Type',  type: 'text',   render: r => stripNVPrefix(r.materialType) },
+    { key: 'zone',                label: 'Zone',           type: 'text' },
+    { key: 'level',                label: 'Level',          type: 'text' },
+    { key: 'lotType',              label: 'Lot Type',       type: 'text' },
+    { key: 'status',               label: 'Status',         type: 'text',   render: r => `<span class="badge ${lotStatusBadgeClass(r.status)}">${r.status}</span>` },
+    { key: 'lotCount',            label: 'Lots',           type: 'number', render: r => fmt(r.lotCount) },
+    { key: 'totalStock',         label: 'Total Stock',    type: 'number', render: r => fmt(r.totalStock) },
+    { key: 'totalSold',           label: 'Sold',           type: 'number', render: r => fmt(r.totalSold) },
+    { key: 'totalBalance',       label: 'Balance',        type: 'number', render: r => fmt(r.totalBalance) },
+    { key: 'totalBalanceAmount', label: 'Balance Value',  type: 'number', render: r => myr(r.totalBalanceAmount) },
+  ],
+  flat: [
+    { key: 'materialType',       label: 'Product Type',  type: 'text',   render: r => stripNVPrefix(r.materialType) },
+    { key: 'lotType',              label: 'Lot Type',       type: 'text' },
+    { key: 'status',               label: 'Status',         type: 'text',   render: r => `<span class="badge ${lotStatusBadgeClass(r.status)}">${r.status}</span>` },
+    { key: 'lotCount',            label: 'Lots',           type: 'number', render: r => fmt(r.lotCount) },
+    { key: 'totalStock',         label: 'Total Stock',    type: 'number', render: r => fmt(r.totalStock) },
+    { key: 'totalSold',           label: 'Sold',           type: 'number', render: r => fmt(r.totalSold) },
+    { key: 'totalBalance',       label: 'Balance',        type: 'number', render: r => fmt(r.totalBalance) },
+    { key: 'totalBalanceAmount', label: 'Balance Value',  type: 'number', render: r => myr(r.totalBalanceAmount) },
+  ],
+};
+
+function lotColumnsFor(mode) {
+  return LOT_COLUMNS[mode] || LOT_COLUMNS.structured;
+}
+
 function lotTableColumnCount(mode) {
-  return mode === 'flat' ? 8 : 10;
+  return lotColumnsFor(mode).length;
+}
+
+// { key: null } means unsorted (server/group order).
+let lotSortState = { key: null, dir: 'asc' };
+
+function sortLotRows(rows, sortState) {
+  if (!sortState.key) return rows;
+  const { key, dir } = sortState;
+  const sign = dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const av = a[key];
+    const bv = b[key];
+    const cmp = (typeof av === 'number' && typeof bv === 'number') ? (av - bv) : naturalCompare(av, bv);
+    return cmp * sign;
+  });
 }
 
 function renderLotsTableHead(mode) {
   const headRow = document.getElementById('lotsHeadRow');
   if (!headRow) return;
-  const cols = mode === 'flat'
-    ? ['Product Type', 'Lot Type', 'Status', 'Lots', 'Total Stock', 'Sold', 'Balance', 'Balance Value']
-    : ['Product Type', 'Zone', 'Level', 'Lot Type', 'Status', 'Lots', 'Total Stock', 'Sold', 'Balance', 'Balance Value'];
-  headRow.innerHTML = cols.map(c => `<th>${c}</th>`).join('');
+  headRow.innerHTML = lotColumnsFor(mode).map(col => {
+    const isSorted = lotSortState.key === col.key;
+    const arrow = isSorted ? `<span class="sort-arrow">${lotSortState.dir === 'asc' ? '▲' : '▼'}</span>` : '';
+    return `<th class="sortable-th${isSorted ? ' sorted' : ''}" data-key="${col.key}">${col.label}${arrow}</th>`;
+  }).join('');
+}
+
+function renderLotResultsBody(mode) {
+  const tbody = document.querySelector('#tableLots tbody');
+  const tfoot = document.querySelector('#tableLots tfoot');
+  if (!tbody) return;
+
+  const columns = lotColumnsFor(mode);
+  const colCount = columns.length;
+  const rows = sortLotRows(lastLotRows, lotSortState);
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--muted)">No lots match these filters.</td></tr>`;
+    if (tfoot) tfoot.innerHTML = '';
+    return;
+  }
+
+  tbody.innerHTML = rows.map(r => `<tr>${
+    columns.map(col => `<td>${col.render ? col.render(r) : (r[col.key] ?? '')}</td>`).join('')
+  }</tr>`).join('');
+
+  const t = sumLotRows(lastLotRows);
+  const textColCount = columns.filter(c => c.type === 'text').length;
+  const numericCells = columns.filter(c => c.type === 'number')
+    .map(col => `<td>${col.key === 'totalBalanceAmount' ? myr(t[col.key]) : fmt(t[col.key])}</td>`).join('');
+  if (tfoot) {
+    tfoot.innerHTML = `<tr class="totals-row"><td colspan="${textColCount}">Totals</td>${numericCells}</tr>`;
+  }
+}
+
+// Re-renders head + body from the cached rows/mode/sort state — no re-query.
+function renderLotResultsTable() {
+  renderLotsTableHead(lastLotMode);
+  renderLotResultsBody(lastLotMode);
+}
+
+function onLotSortClick(key) {
+  if (lotSortState.key === key) {
+    lotSortState = { key, dir: lotSortState.dir === 'asc' ? 'desc' : 'asc' };
+  } else {
+    lotSortState = { key, dir: 'asc' };
+  }
+  renderLotResultsTable();
 }
 
 async function renderLotDrillDown() {
@@ -413,12 +503,15 @@ async function renderLotDrillDown() {
   const tfoot = document.querySelector('#tableLots tfoot');
   if (!tbody) return;
 
-  const materialType = document.getElementById('lotMaterialType')?.value.trim();
-  const mode = materialTypeMode(materialType);
+  const materialType = lotFilters.materialType.getValues();
+  const mode = modeForSelection(materialType);
 
-  if (!materialType || !mode) {
+  if (!materialType.length || !mode) {
+    lastLotRows = [];
+    lastLotMode = 'structured';
+    lotSortState = { key: null, dir: 'asc' };
     renderLotsTableHead('structured');
-    tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--muted)">Please select a Product Type to begin.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${lotTableColumnCount('structured')}" style="text-align:center;color:var(--muted)">Please select a Product Type to begin.</td></tr>`;
     if (tfoot) tfoot.innerHTML = '';
     renderLotMatrix([], {}, 'structured');
     return;
@@ -426,16 +519,16 @@ async function renderLotDrillDown() {
 
   const body = {
     materialType,
-    branch: document.getElementById('lotBranch')?.value.trim(),
-    zone:   document.getElementById('lotZone')?.value.trim(),
-    status: document.getElementById('lotStatus')?.value.trim(),
+    branch: lotFilters.branch.getValues(),
+    zone:   lotFilters.zone.getValues(),
+    status: lotFilters.status.getValues(),
   };
   if (mode === 'structured') {
-    body.suiteNo = document.getElementById('lotSuite')?.value.trim();
-    body.section = document.getElementById('lotSection')?.value.trim();
-    body.level   = document.getElementById('lotLevel')?.value.trim();
+    body.suiteNo = lotFilters.suiteNo.getValues();
+    body.section = lotFilters.section.getValues();
+    body.level   = lotFilters.level.getValues();
   } else {
-    body.lotType = document.getElementById('lotType')?.value.trim();
+    body.lotType = lotFilters.lotType.getValues();
   }
 
   renderLotsTableHead(mode);
@@ -464,49 +557,10 @@ async function renderLotDrillDown() {
     const resolvedMode = data.mode || mode;
     lastLotRows = rows;
     lastLotMode = resolvedMode;
-    const matrixCtx = { branch: body.branch, materialType, zone: body.zone, suite: body.suiteNo };
+    lotSortState = { key: null, dir: 'asc' };
+    const matrixCtx = { branch: body.branch, materialType, zone: body.zone, suite: body.suiteNo || [] };
 
-    if (!rows.length) {
-      tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--muted)">No lots match these filters.</td></tr>`;
-      renderLotMatrix([], matrixCtx, resolvedMode);
-      return;
-    }
-
-    tbody.innerHTML = rows.map(r => resolvedMode === 'flat' ? `<tr>
-      <td>${stripNVPrefix(r.materialType)}</td>
-      <td>${r.lotType}</td>
-      <td><span class="badge ${lotStatusBadgeClass(r.status)}">${r.status}</span></td>
-      <td>${fmt(r.lotCount)}</td>
-      <td>${fmt(r.totalStock)}</td>
-      <td>${fmt(r.totalSold)}</td>
-      <td>${fmt(r.totalBalance)}</td>
-      <td>${myr(r.totalBalanceAmount)}</td>
-    </tr>` : `<tr>
-      <td>${stripNVPrefix(r.materialType)}</td>
-      <td>${r.zone}</td>
-      <td>${r.level}</td>
-      <td>${r.lotType}</td>
-      <td><span class="badge ${lotStatusBadgeClass(r.status)}">${r.status}</span></td>
-      <td>${fmt(r.lotCount)}</td>
-      <td>${fmt(r.totalStock)}</td>
-      <td>${fmt(r.totalSold)}</td>
-      <td>${fmt(r.totalBalance)}</td>
-      <td>${myr(r.totalBalanceAmount)}</td>
-    </tr>`).join('');
-
-    const t = sumLotRows(rows);
-    const labelColspan = resolvedMode === 'flat' ? 3 : 5;
-    if (tfoot) {
-      tfoot.innerHTML = `<tr class="totals-row">
-        <td colspan="${labelColspan}">Totals</td>
-        <td>${fmt(t.lotCount)}</td>
-        <td>${fmt(t.totalStock)}</td>
-        <td>${fmt(t.totalSold)}</td>
-        <td>${fmt(t.totalBalance)}</td>
-        <td>${myr(t.totalBalanceAmount)}</td>
-      </tr>`;
-    }
-
+    renderLotResultsTable();
     renderLotMatrix(rows, matrixCtx, resolvedMode);
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--red)">Error: ${err.message}</td></tr>`;
@@ -542,11 +596,25 @@ function myrCompact(n) {
   return 'RM ' + formatted + suffix;
 }
 
-function matrixCellHtml(units, amount) {
-  return `<div class="matrix-cell-units">${fmt(units)} units</div><div class="matrix-cell-amount">${myrCompact(amount)}</div>`;
+function matrixCellHtml(units, amount, opts) {
+  const { showAmount, showPercentage, grandTotal } = opts;
+  const pctValue = grandTotal > 0 ? (units / grandTotal) * 100 : 0;
+  return `<div class="matrix-cell-units">${fmt(units)} units</div>` +
+    (showAmount     ? `<div class="matrix-cell-amount">${myrCompact(amount)}</div>` : '') +
+    (showPercentage ? `<div class="matrix-cell-pct">${pctValue.toFixed(1)}%</div>` : '');
 }
 
+// Cache of the last matrix render inputs so the Show Amount / Show Percentage
+// checkboxes can re-render instantly client-side without re-querying the server.
+let lastMatrixRows = [];
+let lastMatrixCtx = {};
+let lastMatrixMode = 'structured';
+
 function renderLotMatrix(rows, ctx, mode = 'structured') {
+  lastMatrixRows = rows;
+  lastMatrixCtx = ctx;
+  lastMatrixMode = mode;
+
   const card = document.getElementById('lotMatrixCard');
   const titleEl = document.getElementById('lotMatrixTitle');
   if (!card) return;
@@ -555,6 +623,9 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
     card.style.display = 'none';
     return;
   }
+
+  const showAmount = document.getElementById('matrixShowAmount')?.checked ?? true;
+  const showPercentage = document.getElementById('matrixShowPercentage')?.checked ?? false;
 
   const groupKey = mode === 'flat' ? 'lotType' : 'level';
   const groupLabel = mode === 'flat' ? 'Lot Type' : 'Level';
@@ -573,12 +644,23 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
     cells[r.status][r[groupKey]].amount += r.totalBalanceAmount;
   }
 
+  // Percentages are always relative to the grand total (not the row total), per spec.
+  let grandTotalUnits = 0;
+  for (const status of MATRIX_STATUS_ORDER) {
+    for (const group of groups) grandTotalUnits += cells[status][group].units;
+  }
+  const cellOpts = { showAmount, showPercentage, grandTotal: grandTotalUnits };
+
   const headerEl = document.getElementById('matrixHeader');
   if (headerEl) {
-    const productLabel = stripNVPrefix(ctx.materialType);
+    const joinOrAll = (list, allLabel) => (list && list.length) ? list.join(', ') : allLabel;
+    const branchLabel = joinOrAll(ctx.branch, 'All Branches');
+    const productLabel = joinOrAll((ctx.materialType || []).map(stripNVPrefix), 'All');
+    const zoneLabel = joinOrAll(ctx.zone, 'All');
+    const suiteLabel = joinOrAll(ctx.suite, 'All');
     headerEl.innerHTML = mode === 'flat'
-      ? `<span><strong>${ctx.branch || 'All Branches'}</strong> — <strong>${productLabel}</strong> — Lot Type Summary</span>`
-      : `<span><strong>${ctx.branch || 'All Branches'}</strong> — <strong>${productLabel}</strong> — Zone <strong>${ctx.zone || 'All'}</strong> — Suite <strong>${ctx.suite || 'All'}</strong></span>`;
+      ? `<span><strong>${branchLabel}</strong> — <strong>${productLabel}</strong> — Lot Type Summary</span>`
+      : `<span><strong>${branchLabel}</strong> — <strong>${productLabel}</strong> — Zone <strong>${zoneLabel}</strong> — Suite <strong>${suiteLabel}</strong></span>`;
   }
 
   const headRow = document.getElementById('matrixHeadRow');
@@ -605,14 +687,14 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
         colTotals[status].units += c.units;
         colTotals[status].amount += c.amount;
         const cellClass = status === 'OPEN' ? ' class="matrix-open-col"' : '';
-        return `<td${cellClass}>${matrixCellHtml(c.units, c.amount)}</td>`;
+        return `<td${cellClass}>${matrixCellHtml(c.units, c.amount, cellOpts)}</td>`;
       }).join('');
       grandUnits += rowUnits;
       grandAmount += rowAmount;
       return `<tr>
         <td><strong>${group}</strong></td>
         ${tds}
-        <td class="matrix-total-cell">${matrixCellHtml(rowUnits, rowAmount)}</td>
+        <td class="matrix-total-cell">${matrixCellHtml(rowUnits, rowAmount, cellOpts)}</td>
       </tr>`;
     }).join('');
   }
@@ -621,12 +703,12 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
   if (foot) {
     const tds = MATRIX_STATUS_ORDER.map(status => {
       const cellClass = status === 'OPEN' ? ' class="matrix-open-col"' : '';
-      return `<td${cellClass}>${matrixCellHtml(colTotals[status].units, colTotals[status].amount)}</td>`;
+      return `<td${cellClass}>${matrixCellHtml(colTotals[status].units, colTotals[status].amount, cellOpts)}</td>`;
     }).join('');
     foot.innerHTML = `<tr class="matrix-total-row">
       <td>TOTAL</td>
       ${tds}
-      <td>${matrixCellHtml(grandUnits, grandAmount)}</td>
+      <td>${matrixCellHtml(grandUnits, grandAmount, cellOpts)}</td>
     </tr>`;
   }
 
@@ -668,20 +750,111 @@ function exportLotsCSV() {
   URL.revokeObjectURL(url);
 }
 
-// ── Cascading filters: Material Type → Branch → [Zone → Suite No → Section → Level] | [Lot Type] ──
-function resetSelect(id, placeholder, disabled) {
-  const select = document.getElementById(id);
-  if (!select) return;
-  select.innerHTML = `<option value="">${placeholder}</option>`;
-  select.disabled = disabled;
+// ── Multi-select dropdown component ──
+// Mimics just enough of a <select multiple>'s API (getValues/setOptions/setDisabled) that
+// the cascade logic below can treat every filter uniformly. Empty selection == "All" (no filter).
+class MultiSelect {
+  constructor(id, { placeholder = 'All', disabledText, emptyText = 'No options', displayFn = v => v, onChange = () => {} } = {}) {
+    this.root = document.getElementById(id);
+    // `placeholder` shows when enabled with nothing selected ("All branches" == no filter).
+    // `disabledText` shows only while gated off (e.g. "Select product type first") — kept
+    // separate so re-enabling the field doesn't leave it stuck on the disabled-gate text.
+    this.placeholder = placeholder;
+    this.disabledText = disabledText || placeholder;
+    this.emptyText = emptyText;
+    this.displayFn = displayFn;
+    this.onChange = onChange;
+    this.options = [];
+    this.selected = new Set();
+    this.disabled = false;
+    if (!this.root) return;
+    this.root.classList.add('ms');
+    this.root.innerHTML = `
+      <button type="button" class="ms-toggle"></button>
+      <div class="ms-panel" hidden>
+        <div class="ms-actions">
+          <button type="button" class="ms-select-all">Select All</button>
+          <button type="button" class="ms-clear-all">Clear All</button>
+        </div>
+        <div class="ms-options"></div>
+      </div>`;
+    this.toggleBtn = this.root.querySelector('.ms-toggle');
+    this.panel = this.root.querySelector('.ms-panel');
+    this.optionsEl = this.root.querySelector('.ms-options');
+
+    this.toggleBtn.addEventListener('click', (e) => { e.stopPropagation(); this._togglePanel(); });
+    this.root.querySelector('.ms-select-all').addEventListener('click', (e) => { e.stopPropagation(); this.selectAll(); });
+    this.root.querySelector('.ms-clear-all').addEventListener('click', (e) => { e.stopPropagation(); this.clearAll(); });
+    this.optionsEl.addEventListener('change', (e) => {
+      if (!e.target.matches('input[type="checkbox"]')) return;
+      if (e.target.checked) this.selected.add(e.target.value); else this.selected.delete(e.target.value);
+      this._render();
+      this.onChange(this.getValues());
+    });
+    document.addEventListener('click', (e) => {
+      if (!this.root.contains(e.target)) this.panel.setAttribute('hidden', '');
+    });
+
+    this._render();
+  }
+
+  _togglePanel() {
+    if (this.disabled) return;
+    const isHidden = this.panel.hasAttribute('hidden');
+    document.querySelectorAll('.ms-panel').forEach(p => p.setAttribute('hidden', ''));
+    if (isHidden) this.panel.removeAttribute('hidden');
+  }
+
+  _render() {
+    this.optionsEl.innerHTML = this.options.length
+      ? this.options.map(v => `<label class="ms-option"><input type="checkbox" value="${escapeHtml(v)}" ${this.selected.has(v) ? 'checked' : ''}> ${escapeHtml(this.displayFn(v))}</label>`).join('')
+      : `<div class="ms-empty">${escapeHtml(this.disabled ? this.disabledText : this.emptyText)}</div>`;
+
+    const n = this.selected.size;
+    let label;
+    if (this.disabled) label = this.disabledText;
+    else if (!this.options.length) label = this.emptyText;
+    else if (n === 0) label = this.placeholder;
+    else if (n === this.options.length) label = `All (${n})`;
+    else if (n <= 2) label = [...this.selected].map(this.displayFn).join(', ');
+    else label = `${n} selected`;
+    this.toggleBtn.textContent = label;
+  }
+
+  // preserveSelection keeps any currently-checked values that still exist in the new list —
+  // e.g. changing Branch shouldn't blow away a Zone pick that's still valid for the new branch.
+  setOptions(values, { preserveSelection = true } = {}) {
+    this.options = values;
+    this.selected = preserveSelection ? new Set([...this.selected].filter(v => values.includes(v))) : new Set();
+    this._render();
+  }
+
+  setDisabled(disabled, disabledText) {
+    this.disabled = disabled;
+    if (disabledText !== undefined) this.disabledText = disabledText;
+    this.toggleBtn.disabled = disabled;
+    this.root.classList.toggle('ms-disabled', disabled);
+    if (disabled) this.panel.setAttribute('hidden', '');
+    this._render();
+  }
+
+  selectAll() {
+    this.selected = new Set(this.options);
+    this._render();
+    this.onChange(this.getValues());
+  }
+
+  clearAll() {
+    this.selected = new Set();
+    this._render();
+    this.onChange(this.getValues());
+  }
+
+  getValues() { return [...this.selected]; }
 }
 
-function populateSelect(id, values, placeholder, disabled = false) {
-  const select = document.getElementById(id);
-  if (!select) return;
-  select.innerHTML = `<option value="">${placeholder}</option>` +
-    values.map(v => `<option value="${v}">${v}</option>`).join('');
-  select.disabled = disabled;
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 function applyLotModeUI(mode) {
@@ -689,11 +862,25 @@ function applyLotModeUI(mode) {
   document.querySelectorAll('.flat-only').forEach(el => { el.style.display = mode === 'flat' ? '' : 'none'; });
 }
 
-function populateProductTypeSelect(values) {
-  const select = document.getElementById('lotMaterialType');
-  if (!select) return;
-  select.innerHTML = `<option value="">Select product type</option>` +
-    values.map(v => `<option value="${v}">${stripNVPrefix(v)}</option>`).join('');
+// Mirrors the backend's classifyMaterialTypes: mixing structured + flat falls back to the
+// structured view; a pure flat-land selection is the only case that gets the flat view.
+function modeForSelection(materialTypes) {
+  if (!materialTypes.length) return null;
+  const modes = new Set(materialTypes.map(materialTypeMode));
+  if (modes.has('structured')) return 'structured';
+  if (modes.size === 1 && modes.has('flat')) return 'flat';
+  return null;
+}
+
+// Builds a query string using repeated keys for arrays (?branch=GX&branch=KL), which
+// Express's default `qs` query parser reassembles into req.query.branch = ['GX','KL'].
+function buildArrayQuery(paramsObj) {
+  const qs = new URLSearchParams();
+  for (const [key, val] of Object.entries(paramsObj)) {
+    const list = Array.isArray(val) ? val : (val !== undefined && val !== null && val !== '' ? [val] : []);
+    for (const v of list) qs.append(key, v);
+  }
+  return qs.toString();
 }
 
 async function fetchLotMaterialTypes() {
@@ -710,7 +897,7 @@ async function fetchLotMaterialTypes() {
 
 async function fetchLotZones(branch, materialType) {
   try {
-    const res = await fetch(`/api/lots/zones?branch=${encodeURIComponent(branch)}&materialType=${encodeURIComponent(materialType)}`);
+    const res = await fetch(`/api/lots/zones?${buildArrayQuery({ branch, materialType })}`);
     if (!res.ok) return [];
     const { zones } = await res.json();
     return zones;
@@ -722,7 +909,7 @@ async function fetchLotZones(branch, materialType) {
 
 async function fetchLotSuites(branch, zone, materialType) {
   try {
-    const res = await fetch(`/api/lots/suites?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}&materialType=${encodeURIComponent(materialType)}`);
+    const res = await fetch(`/api/lots/suites?${buildArrayQuery({ branch, zone, materialType })}`);
     if (!res.ok) return { suites: [], statuses: [] };
     return await res.json();
   } catch (e) {
@@ -733,7 +920,7 @@ async function fetchLotSuites(branch, zone, materialType) {
 
 async function fetchLotSections(branch, zone, suiteNo, materialType) {
   try {
-    const res = await fetch(`/api/lots/sections?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}&suiteNo=${encodeURIComponent(suiteNo)}&materialType=${encodeURIComponent(materialType)}`);
+    const res = await fetch(`/api/lots/sections?${buildArrayQuery({ branch, zone, suiteNo, materialType })}`);
     if (!res.ok) return { sections: [], statuses: [] };
     return await res.json();
   } catch (e) {
@@ -744,7 +931,7 @@ async function fetchLotSections(branch, zone, suiteNo, materialType) {
 
 async function fetchLotLevels(branch, zone, suiteNo, section, materialType) {
   try {
-    const res = await fetch(`/api/lots/levels?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}&suiteNo=${encodeURIComponent(suiteNo)}&section=${encodeURIComponent(section)}&materialType=${encodeURIComponent(materialType)}`);
+    const res = await fetch(`/api/lots/levels?${buildArrayQuery({ branch, zone, suiteNo, section, materialType })}`);
     if (!res.ok) return { levels: [], statuses: [] };
     return await res.json();
   } catch (e) {
@@ -755,7 +942,7 @@ async function fetchLotLevels(branch, zone, suiteNo, section, materialType) {
 
 async function fetchLotTypes(branch, zone, materialType) {
   try {
-    const res = await fetch(`/api/lots/lotTypes?branch=${encodeURIComponent(branch)}&zone=${encodeURIComponent(zone)}&materialType=${encodeURIComponent(materialType)}`);
+    const res = await fetch(`/api/lots/lotTypes?${buildArrayQuery({ branch, zone, materialType })}`);
     if (!res.ok) return { lotTypes: [], statuses: [] };
     return await res.json();
   } catch (e) {
@@ -764,124 +951,145 @@ async function fetchLotTypes(branch, zone, materialType) {
   }
 }
 
-// Zone is a standard filter for every product type; everything past it (Suite/Section/Level
-// for structured types, Lot Type for flat land) resets whenever Branch or Product Type changes.
-function resetLotZoneDownstream(zonePlaceholder) {
-  resetSelect('lotZone',    zonePlaceholder, true);
-  resetSelect('lotSuite',   'Select zone first', true);
-  resetSelect('lotSection', 'Select suite first', true);
-  resetSelect('lotLevel',   'Select section first', true);
-  resetSelect('lotType',    'Select zone first', true);
-  resetSelect('lotStatus',  'All statuses', false);
-}
+// ── Filter registry + cascade orchestration ──
+// Every downstream level's options are re-derived from whatever the upstream levels currently
+// have selected (which may be empty == "All"), rather than being hard-gated on a non-empty
+// parent pick. That's what lets, e.g., Suite No legitimately show "no suite data" while Section
+// still resolves normally — there's no separate bypass path to maintain.
+const lotFilters = {};
 
-async function onLotMaterialTypeChange() {
-  const materialType = document.getElementById('lotMaterialType')?.value.trim();
-  const branch = document.getElementById('lotBranch')?.value.trim();
-  const mode = materialTypeMode(materialType);
-
-  applyLotModeUI(mode);
-  resetLotZoneDownstream(mode ? 'Select zone' : 'Select product type first');
-  const matrixCard = document.getElementById('lotMatrixCard');
-  if (matrixCard) matrixCard.style.display = 'none';
-
+async function refreshLotLocationFields() {
+  const materialType = lotFilters.materialType.getValues();
+  const mode = modeForSelection(materialType);
   if (!mode) return;
-  const zones = await fetchLotZones(branch, materialType);
-  populateSelect('lotZone', zones, 'Select zone', false);
-}
 
-async function onLotBranchChange() {
-  const branch = document.getElementById('lotBranch')?.value.trim();
-  const materialType = document.getElementById('lotMaterialType')?.value.trim();
-  const mode = materialTypeMode(materialType);
-
-  resetLotZoneDownstream(mode ? 'Select zone' : 'Select product type first');
-
-  if (!mode) return;
-  const zones = await fetchLotZones(branch, materialType);
-  populateSelect('lotZone', zones, 'Select zone', false);
-}
-
-async function onLotZoneChange() {
-  const branch = document.getElementById('lotBranch')?.value.trim();
-  const zone   = document.getElementById('lotZone')?.value.trim();
-  const materialType = document.getElementById('lotMaterialType')?.value.trim();
-  const mode = materialTypeMode(materialType);
-
-  resetSelect('lotSection', 'Select suite first', true);
-  resetSelect('lotLevel',   'Select section first', true);
-  resetSelect('lotSuite',   zone ? 'Select suite' : 'Select zone first', true);
-  resetSelect('lotType',    zone ? 'Select lot type' : 'Select zone first', true);
-
-  if (!zone || !mode) return;
+  const branch = lotFilters.branch.getValues();
+  const zone = lotFilters.zone.getValues();
 
   if (mode === 'structured') {
-    const { suites, statuses } = await fetchLotSuites(branch, zone, materialType);
-    populateSelect('lotStatus', statuses, 'All statuses', false);
+    const { suites, statuses: suiteStatuses } = await fetchLotSuites(branch, zone, materialType);
+    lotFilters.suiteNo.setOptions(suites);
 
-    if (!suites.length) {
-      // Some structured types have 0% Suite No coverage for this zone/branch — skip
-      // straight to Section rather than permanently blocking the cascade.
-      resetSelect('lotSuite', 'No suite data', true);
-      const { sections, statuses: sectionStatuses } = await fetchLotSections(branch, zone, '', materialType);
-      populateSelect('lotSection', sections, 'Select section', false);
-      populateSelect('lotStatus',  sectionStatuses, 'All statuses', false);
-    } else {
-      populateSelect('lotSuite', suites, 'Select suite', false);
-    }
+    const suiteNo = lotFilters.suiteNo.getValues();
+    const { sections, statuses: sectionStatuses } = await fetchLotSections(branch, zone, suiteNo, materialType);
+    lotFilters.section.setOptions(sections);
+
+    const section = lotFilters.section.getValues();
+    const { levels, statuses: levelStatuses } = await fetchLotLevels(branch, zone, suiteNo, section, materialType);
+    lotFilters.level.setOptions(levels);
+
+    lotFilters.status.setOptions(levelStatuses.length ? levelStatuses : (sectionStatuses.length ? sectionStatuses : suiteStatuses));
   } else {
     const { lotTypes, statuses } = await fetchLotTypes(branch, zone, materialType);
-    populateSelect('lotType', lotTypes, 'Select lot type', false);
-    populateSelect('lotStatus', statuses, 'All statuses', false);
+    lotFilters.lotType.setOptions(lotTypes);
+    lotFilters.status.setOptions(statuses);
   }
 }
 
-async function onLotSuiteChange() {
-  const branch  = document.getElementById('lotBranch')?.value.trim();
-  const zone    = document.getElementById('lotZone')?.value.trim();
-  const suiteNo = document.getElementById('lotSuite')?.value.trim();
-  const materialType = document.getElementById('lotMaterialType')?.value.trim();
+async function refreshLotCascade() {
+  const materialType = lotFilters.materialType.getValues();
+  const mode = modeForSelection(materialType);
+  applyLotModeUI(mode);
 
-  resetSelect('lotSection', suiteNo ? 'Select section' : 'Select suite first', !suiteNo);
-  resetSelect('lotLevel',   'Select section first', true);
+  const gated = [lotFilters.zone, lotFilters.suiteNo, lotFilters.section, lotFilters.level, lotFilters.lotType, lotFilters.status];
 
-  if (!suiteNo) return;
+  if (!mode) {
+    gated.forEach(f => { f.setOptions([]); f.setDisabled(true, 'Select product type first'); });
+    const matrixCard = document.getElementById('lotMatrixCard');
+    if (matrixCard) matrixCard.style.display = 'none';
+    return;
+  }
+  gated.forEach(f => f.setDisabled(false));
 
-  const { sections, statuses } = await fetchLotSections(branch, zone, suiteNo, materialType);
-  populateSelect('lotSection', sections, 'Select section', false);
-  populateSelect('lotStatus',  statuses, 'All statuses', false);
+  const branch = lotFilters.branch.getValues();
+  const zones = await fetchLotZones(branch, materialType);
+  lotFilters.zone.setOptions(zones);
+
+  await refreshLotLocationFields();
 }
 
-async function onLotSectionChange() {
-  const branch  = document.getElementById('lotBranch')?.value.trim();
-  const zone    = document.getElementById('lotZone')?.value.trim();
-  const suiteNo = document.getElementById('lotSuite')?.value.trim();
-  const section = document.getElementById('lotSection')?.value.trim();
-  const materialType = document.getElementById('lotMaterialType')?.value.trim();
-
-  resetSelect('lotLevel', section ? 'Select level' : 'Select section first', !section);
-
-  if (!section) return;
-
-  const { levels, statuses } = await fetchLotLevels(branch, zone, suiteNo, section, materialType);
-  populateSelect('lotLevel',  levels,   'Select level', false);
-  populateSelect('lotStatus', statuses, 'All statuses', false);
-}
-
-async function initLotMaterialTypeFilter() {
+function initLotFilters() {
   renderLotsTableHead('structured');
-  const materialTypes = await fetchLotMaterialTypes();
-  populateProductTypeSelect(materialTypes);
+
+  lotFilters.branch = new MultiSelect('lotBranch', {
+    placeholder: 'All branches',
+    onChange: refreshLotCascade,
+  });
+  lotFilters.branch.setOptions(['KL', 'SA', 'GX', 'SE', 'IJ', 'IP', 'KR', 'KN']);
+
+  lotFilters.materialType = new MultiSelect('lotMaterialType', {
+    placeholder: 'Select product type',
+    displayFn: stripNVPrefix,
+    onChange: refreshLotCascade,
+  });
+
+  const disabledGateText = 'Select product type first';
+
+  lotFilters.zone = new MultiSelect('lotZone', {
+    placeholder: 'All zones',
+    disabledText: disabledGateText,
+    emptyText: 'No zones found',
+    onChange: refreshLotLocationFields,
+  });
+  lotFilters.zone.setDisabled(true);
+
+  lotFilters.suiteNo = new MultiSelect('lotSuite', {
+    placeholder: 'All suites',
+    disabledText: disabledGateText,
+    emptyText: 'No suite data',
+    onChange: refreshLotLocationFields,
+  });
+  lotFilters.suiteNo.setDisabled(true);
+
+  lotFilters.section = new MultiSelect('lotSection', {
+    placeholder: 'All sections',
+    disabledText: disabledGateText,
+    emptyText: 'No sections found',
+    onChange: refreshLotLocationFields,
+  });
+  lotFilters.section.setDisabled(true);
+
+  lotFilters.level = new MultiSelect('lotLevel', {
+    placeholder: 'All levels',
+    disabledText: disabledGateText,
+    emptyText: 'No levels found',
+  });
+  lotFilters.level.setDisabled(true);
+
+  lotFilters.lotType = new MultiSelect('lotType', {
+    placeholder: 'All lot types',
+    disabledText: disabledGateText,
+    emptyText: 'No lot types found',
+  });
+  lotFilters.lotType.setDisabled(true);
+
+  lotFilters.status = new MultiSelect('lotStatus', {
+    placeholder: 'All statuses',
+    disabledText: disabledGateText,
+    emptyText: 'No statuses found',
+  });
+  lotFilters.status.setDisabled(true);
+
   applyLotModeUI(null);
+
+  fetchLotMaterialTypes().then(materialTypes => lotFilters.materialType.setOptions(materialTypes));
 }
 
-document.getElementById('lotMaterialType')?.addEventListener('change', onLotMaterialTypeChange);
-document.getElementById('lotBranch')?.addEventListener('change', onLotBranchChange);
-document.getElementById('lotZone')?.addEventListener('change', onLotZoneChange);
-document.getElementById('lotSuite')?.addEventListener('change', onLotSuiteChange);
-document.getElementById('lotSection')?.addEventListener('change', onLotSectionChange);
+// Delegated so re-rendering the header row's innerHTML on every sort/search doesn't lose the listener.
+document.getElementById('lotsHeadRow')?.addEventListener('click', (e) => {
+  const th = e.target.closest('th[data-key]');
+  if (!th) return;
+  onLotSortClick(th.dataset.key);
+});
 
-initLotMaterialTypeFilter();
+// Instant client-side re-render from cached matrix data — no re-query.
+function rerenderCachedMatrix() {
+  renderLotMatrix(lastMatrixRows, lastMatrixCtx, lastMatrixMode);
+}
+document.getElementById('matrixShowAmount')?.addEventListener('change', rerenderCachedMatrix);
+document.getElementById('matrixShowPercentage')?.addEventListener('change', rerenderCachedMatrix);
+
+initLotFilters();
 
 window.renderLotDrillDown = renderLotDrillDown;
 window.exportLotsCSV = exportLotsCSV;
