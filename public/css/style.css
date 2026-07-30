@@ -431,6 +431,112 @@ tbody td {
   color: var(--red);
 }
 
+/* ── Lot Drill-Down Tab ── */
+.lot-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+}
+.lot-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.lot-filter-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.branch-select:disabled {
+  background: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.lot-filter-help {
+  margin-top: 0.9rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+tfoot .totals-row td {
+  font-weight: 700;
+  background: #eef2ff;
+  color: var(--navy);
+  border-top: 2px solid var(--navy);
+}
+
+/* ── Zone Summary Matrix ── */
+.matrix-header {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: var(--navy);
+  font-weight: 500;
+  margin-bottom: 0.9rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+.matrix-header strong { color: var(--gold); }
+
+.matrix-cell-units {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.matrix-cell-amount {
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+th.matrix-open-col,
+td.matrix-open-col { background: #e8f3ff; }
+tbody tr:hover td.matrix-open-col { background: #dcecfe; }
+
+td.matrix-total-cell,
+tfoot .matrix-total-row td {
+  font-weight: 700;
+  background: #dbe3f5;
+}
+tfoot .matrix-total-row td .matrix-cell-amount { color: var(--navy); }
+td.matrix-open-col.matrix-total-cell,
+tfoot .matrix-total-row td.matrix-open-col { background: #c7d5f2; }
+
+.matrix-kpi-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 1.1rem;
+}
+.matrix-kpi {
+  flex: 1;
+  min-width: 140px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+  text-align: center;
+}
+.matrix-kpi-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--navy);
+}
+.matrix-kpi-label {
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 0.25rem;
+}
+
 /* ── AI Query Tab ── */
 .query-layout {
   display: flex;

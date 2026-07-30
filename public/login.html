@@ -80,6 +80,18 @@
     }
     .error-box.show { display: block; }
 
+    .info-box {
+      background: #EEF2FA;
+      border: 1px solid #1A2C5B;
+      color: #1A2C5B;
+      border-radius: 6px;
+      padding: 0.6rem 0.85rem;
+      font-size: 0.84rem;
+      margin-bottom: 1.25rem;
+      display: none;
+    }
+    .info-box.show { display: block; }
+
     label {
       display: block;
       font-size: 0.82rem;
@@ -160,6 +172,10 @@
 
     <div class="gold-rule"></div>
 
+    <div class="info-box" id="expiredBox">
+      Your session has expired. Please log in again.
+    </div>
+
     <div class="error-box" id="errorBox">
       Incorrect password. Please try again.
     </div>
@@ -177,6 +193,9 @@
     const params = new URLSearchParams(window.location.search);
     if (params.get('error')) {
       document.getElementById('errorBox').classList.add('show');
+    }
+    if (params.get('expired')) {
+      document.getElementById('expiredBox').classList.add('show');
     }
   </script>
 </body>

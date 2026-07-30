@@ -8,6 +8,7 @@ import {
   getStatusBreakdown,
   getPriceRangeSummary,
 } from '../src/reader.js';
+import { queryLots } from './lots.js';
 
 const router = Router();
 const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
@@ -18,6 +19,31 @@ function fmt(n) {
 
 function pct(n) {
   return Number(n).toFixed(1) + '%';
+}
+
+const LOT_KEYWORD_RE = /\b(zone|suite|level|lot)s?\b/i;
+const BRANCHES = ['KL', 'SA', 'GX', 'SE', 'IJ', 'IP', 'KR', 'KN'];
+
+function extractBranch(question) {
+  const upper = question.toUpperCase();
+  return BRANCHES.find(b => new RegExp(`\\b${b}\\b`).test(upper));
+}
+
+function buildLotContext(question) {
+  if (!LOT_KEYWORD_RE.test(question)) return '';
+  const branch = extractBranch(question);
+  const rows = queryLots(branch ? { branch } : {});
+  if (!rows.length) return '';
+
+  const lotTable = rows.slice(0, 50).map(r =>
+    `  ${r.zone} | ${r.level} | ${r.status} | ${r.totalStock} | ${r.totalSold} | ${r.totalBalance} | ${fmt(r.totalBalanceAmount)}`
+  ).join('\n');
+
+  return `LOT-LEVEL DATA (for this query)${branch ? ` — Branch ${branch}` : ''}:
+Zone | Level | Status | Stock | Sold | Balance | Value
+${lotTable}
+
+`;
 }
 
 function buildSystemPrompt() {
@@ -102,10 +128,11 @@ router.post('/', async (req, res) => {
   ];
 
   try {
+    const system = buildLotContext(question) + buildSystemPrompt();
     const response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 1024,
-      system: buildSystemPrompt(),
+      system,
       messages,
     });
 
