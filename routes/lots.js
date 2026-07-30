@@ -127,6 +127,10 @@ export function getMaterialTypes() {
   return distinctColumn('Material Type Desc.', '', []);
 }
 
+export function getBranches() {
+  return distinctColumn('Branch', '', []);
+}
+
 // Zones are scoped by branch + material type.
 export function getZones(filters = {}) {
   const { branch, materialType } = filters;
@@ -183,12 +187,13 @@ router.post('/', (req, res) => {
   }
 });
 
-// Material type list + structured/flat classification for the selected type(s).
+// Material type + branch lists, and structured/flat classification for the selected type(s).
 router.get('/filters', (req, res) => {
   try {
     const materialTypes = getMaterialTypes();
+    const branches = getBranches();
     const mode = classifyMaterialTypes(req.query.materialType);
-    res.json({ materialTypes, mode });
+    res.json({ materialTypes, branches, mode });
   } catch (err) {
     console.error('Lot filters query error:', err.message);
     res.status(500).json({ error: err.message });

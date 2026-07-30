@@ -73,6 +73,15 @@ export function getOverview() {
   return { totalStock, totalSold, totalBalance, sellThrough, totalValue };
 }
 
+export function getBranches() {
+  return getDb().prepare(`
+    SELECT DISTINCT TRIM("Branch") AS branch
+    FROM master_stock
+    WHERE "Branch" IS NOT NULL AND TRIM("Branch") != ''
+    ORDER BY branch
+  `).all().map(r => r.branch);
+}
+
 export function getBranchSummary() {
   const rows = getDb().prepare(`
     SELECT
