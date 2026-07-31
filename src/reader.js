@@ -31,7 +31,7 @@ export function loadStockData() {
       "Sales Status", "Price Range", "Lot Type",
       "Total Stock Case", "Total Sold Case", "Total Balance Case",
       "Total Balance Amount", "Unit Price",
-      "BD Focus Zone", "Lot Create On", "Dragon Zone"
+      "BD Focus Zone", "Lot Create On"
     FROM master_stock
   `).all();
 
@@ -50,7 +50,6 @@ export function loadStockData() {
     unitPrice:       Number(r['Unit Price'] ?? 0),
     bdFocusZone:     String(r['BD Focus Zone'] ?? '').trim().toLowerCase() === 'yes',
     lotCreatedOn:    parseLotDate(r['Lot Create On']),
-    dragonZone:      String(r['Dragon Zone'] ?? '').trim().toLowerCase() === 'yes',
   }));
   return rowCache;
 }
