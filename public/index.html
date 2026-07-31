@@ -390,13 +390,14 @@
             <label class="lot-filter-label" for="pricingMinStock">Min Stock Threshold</label>
             <input type="number" id="pricingMinStock" class="branch-select" value="100" min="0" step="10">
           </div>
-          <button class="btn-report" onclick="renderPricingIntelligence()">
+          <button class="btn-report" id="btnPricingSearch" onclick="renderPricingIntelligence()">
             <span>&#128269;</span> Search
           </button>
-          <button class="btn-report" onclick="exportPricingQuadrantExcel()">
+          <button class="btn-report" id="btnPricingExportQuadrant" onclick="exportPricingQuadrantExcel()">
             <span>&#128202;</span> Export as Excel
           </button>
         </div>
+        <p class="lot-filter-help pricing-gate-message" id="pricingGateMessage">Select at least one Branch and Product Type to begin.</p>
         <p class="lot-filter-help">Min Stock Threshold excludes low-volume Product &times; Price Range &times; Branch
           combinations from the quadrant chart and category tables below, to keep the analysis focused on
           statistically meaningful samples.</p>
@@ -415,7 +416,7 @@
             <span id="quadrantDrillDownTitle"></span>
             <button type="button" class="drilldown-close" onclick="closeQuadrantDrillDown()">&times;</button>
           </div>
-          <div class="table-scroll" id="quadrantDrillDownContent"></div>
+          <div class="table-scroll" id="quadrantDrillDownContent" data-drill-content></div>
         </div>
       </div>
 
@@ -433,7 +434,7 @@
           <div class="table-scroll">
             <table id="pricingTable_sweet_spot">
               <thead><tr id="pricingHead_sweet_spot"></tr></thead>
-              <tbody><tr><td style="text-align:center;color:var(--muted)">Click Search to load pricing data.</td></tr></tbody>
+              <tbody><tr><td style="text-align:center;color:var(--muted)">Select at least one Branch and Product Type, then click Search to load pricing data.</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -441,7 +442,7 @@
           <div class="table-scroll">
             <table id="pricingTable_low_hanging_fruit">
               <thead><tr id="pricingHead_low_hanging_fruit"></tr></thead>
-              <tbody><tr><td style="text-align:center;color:var(--muted)">Click Search to load pricing data.</td></tr></tbody>
+              <tbody><tr><td style="text-align:center;color:var(--muted)">Select at least one Branch and Product Type, then click Search to load pricing data.</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -449,7 +450,7 @@
           <div class="table-scroll">
             <table id="pricingTable_long_ignored_gem">
               <thead><tr id="pricingHead_long_ignored_gem"></tr></thead>
-              <tbody><tr><td style="text-align:center;color:var(--muted)">Click Search to load pricing data.</td></tr></tbody>
+              <tbody><tr><td style="text-align:center;color:var(--muted)">Select at least one Branch and Product Type, then click Search to load pricing data.</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -457,7 +458,7 @@
           <div class="table-scroll">
             <table id="pricingTable_dead_stock">
               <thead><tr id="pricingHead_dead_stock"></tr></thead>
-              <tbody><tr><td style="text-align:center;color:var(--muted)">Click Search to load pricing data.</td></tr></tbody>
+              <tbody><tr><td style="text-align:center;color:var(--muted)">Select at least one Branch and Product Type, then click Search to load pricing data.</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -469,7 +470,7 @@
         <div class="table-scroll">
           <table id="tableAgedInventory">
             <thead><tr id="agedHeadRow"></tr></thead>
-            <tbody><tr><td style="text-align:center;color:var(--muted)">Click Search to load pricing data.</td></tr></tbody>
+            <tbody><tr><td style="text-align:center;color:var(--muted)">Select at least one Branch and Product Type, then click Search to load pricing data.</td></tr></tbody>
           </table>
         </div>
         <p class="lot-filter-help">Rows highlighted amber have an average age over 2 years (730 days).
@@ -492,13 +493,14 @@
             <label class="lot-filter-label" for="pivotMetric">Metric</label>
             <select id="pivotMetric" class="branch-select"></select>
           </div>
-          <button class="btn-report" onclick="generatePricingPivot()">
+          <button class="btn-report" id="btnPivotGenerate" onclick="generatePricingPivot()">
             <span>&#128202;</span> Generate Matrix
           </button>
           <button class="btn-report" onclick="exportPivotExcel()">
             <span>&#11015;</span> Export as Excel
           </button>
         </div>
+        <p class="lot-filter-help pricing-gate-message" id="pivotGateMessage">Select at least one Branch and Product Type (in Filters above) to begin.</p>
         <div class="matrix-header" id="pivotHeader"></div>
         <div class="table-scroll">
           <table id="tablePivot">
