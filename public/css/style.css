@@ -811,6 +811,68 @@ tbody tr.row-amber:hover td { background: #fcefd4; }
 }
 .btn-expand:hover { background: var(--navy); color: var(--white); }
 
+/* Row actions cell (Aged Inventory + the 4 category tables): Lot Type filter, View Lots,
+   Zone Breakdown, side by side. */
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+/* Lot Type filter — a native <details>/<summary> checkbox dropdown, narrows View Lots only. */
+.lot-type-filter {
+  position: relative;
+}
+.lot-type-filter summary {
+  list-style: none;
+  padding: 0.3rem 0.6rem;
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.lot-type-filter summary::-webkit-details-marker { display: none; }
+.lot-type-filter summary::after { content: ' ▾'; color: var(--muted); }
+.lot-type-filter[open] summary { border-color: var(--navy); }
+.lot-type-filter-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  min-width: 160px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--white);
+  border: 1.5px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(26, 44, 91, 0.16);
+  padding: 0.3rem 0;
+}
+.lot-type-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.78rem;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.lot-type-option:hover { background: var(--bg); }
+.lot-type-option input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--navy);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 tr.accordion-detail > td { padding: 0; }
 tr.accordion-detail:hover { background: none; }
 .drilldown-inline {
