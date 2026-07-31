@@ -1471,6 +1471,21 @@ const AGED_INVENTORY_COLUMNS = [
   { key: 'balanceValueOver365',  label: 'Balance Value > 365d',   type: 'number', render: r => myr(r.balanceValueOver365) },
 ];
 
+// ── Overview: Product Type Summary + per-Branch unsold breakdown ──
+const PRODUCT_SUMMARY_COLUMNS = [
+  { key: 'productType', label: 'Product Type',   type: 'text',   render: r => stripNVPrefix(r.productType) },
+  { key: 'totalStock',  label: 'Total Quantity',  type: 'number', render: r => fmt(r.totalStock) },
+  { key: 'avgPrice',    label: 'Avg Price',       type: 'number', render: r => myr(r.avgPrice) },
+  { key: 'lotCount',    label: 'Lot Count',       type: 'number', render: r => fmt(r.lotCount) },
+];
+
+const PRODUCT_BREAKDOWN_COLUMNS = [
+  { key: 'branch',              label: 'Branch' },
+  { key: 'unsoldUnits',         label: 'Unsold Units',         render: r => fmt(r.unsoldUnits) },
+  { key: 'unsoldBalanceValue',  label: 'Unsold Balance Value', render: r => myr(r.unsoldBalanceValue) },
+  { key: 'sellThrough',         label: 'Sell-through %',       render: r => pct(r.sellThrough) },
+];
+
 // ── Pricing drill-down (Lot Drill-Down reuse) ──
 // Compact lot columns shown in the expandable drill-down panels/accordions. "Suite"/"Section"
 // are only meaningful for structured product types (Niche/Pedestal/etc.) — flat land types
@@ -1690,12 +1705,18 @@ async function fetchPricingJSON(path, body) {
 
 let lastPricingQuadrant = [];
 let lastPricingAged = [];
+let lastPricingByProduct = [];
 let pricingFilters = { branch: [], productType: [] };
 let pricingLoaded = false;
+let productSummarySortState = { key: 'productType', dir: 'asc' };
 
+// Sweet Spot / Low-Hanging Fruit had no default sort at all (key: null → whatever order the
+// backend happened to return) until this row was audited — Branch asc now matches the
+// convention set by the View Lots drill-down. Long-Ignored Gem / Dead Stock already had a
+// deliberate, sensible default (worst balance value first) so those are left as-is.
 const pricingCategorySortState = {
-  sweet_spot:        { key: null,          dir: 'asc' },
-  low_hanging_fruit: { key: null,          dir: 'asc' },
+  sweet_spot:        { key: 'branch',       dir: 'asc' },
+  low_hanging_fruit: { key: 'branch',       dir: 'asc' },
   long_ignored_gem:  { key: 'balanceValue', dir: 'desc' },
   dead_stock:        { key: 'balanceValue', dir: 'desc' },
 };
@@ -1767,6 +1788,70 @@ function renderPricingOverviewKPIs(overview, quadrantRows) {
   set('kpi-pricingSweetSpot', fmt(counts.sweet_spot));
   set('kpi-pricingGems', fmt(counts.long_ignored_gem));
   set('kpi-pricingDeadStock', fmt(counts.dead_stock));
+
+  lastPricingByProduct = overview.byProduct || [];
+  renderPricingProductSummaryTable(lastPricingByProduct);
+}
+
+function renderPricingProductSummaryTable(rows) {
+  const headRow = document.getElementById('pricingProductSummaryHead');
+  const tbody = document.querySelector('#pricingProductSummary tbody');
+  if (!headRow || !tbody) return;
+
+  const colCount = PRODUCT_SUMMARY_COLUMNS.length + 1;
+  headRow.innerHTML = PRODUCT_SUMMARY_COLUMNS.map(col => {
+    const isSorted = productSummarySortState.key === col.key;
+    const arrow = isSorted ? `<span class="sort-arrow">${productSummarySortState.dir === 'asc' ? '▲' : '▼'}</span>` : '';
+    return `<th class="sortable-th${isSorted ? ' sorted' : ''}" data-product-summary-key="${col.key}">${col.label}${arrow}</th>`;
+  }).join('') + '<th></th>';
+
+  const sorted = sortByKey(rows, productSummarySortState);
+  if (!sorted.length) {
+    tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--muted)">No data.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = sorted.map(r => {
+    const cells = PRODUCT_SUMMARY_COLUMNS.map(col => `<td>${col.render ? col.render(r) : (r[col.key] ?? '')}</td>`).join('');
+    const btn = `<button type="button" class="btn-expand" data-action="toggle-product-breakdown"
+      data-product="${escapeHtml(r.productType)}" aria-label="Expand branch breakdown">+</button>`;
+    return `<tr class="accordion-row">${cells}<td>${btn}</td></tr>
+      <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-branch-breakdown-content></div></td></tr>`;
+  }).join('');
+}
+
+function renderProductBranchBreakdownHTML(rows) {
+  if (!rows.length) return `<div class="drilldown-empty">No unsold (OPEN) lots for this product.</div>`;
+  // Fixed default: most unsold units first — this mini-table isn't user-sortable, it always
+  // answers "which branch has the most unsold stock for this product" at a glance.
+  const sorted = [...rows].sort((a, b) => b.unsoldUnits - a.unsoldUnits);
+  return `<table class="drilldown-table"><thead><tr>${
+    PRODUCT_BREAKDOWN_COLUMNS.map(c => `<th>${c.label}</th>`).join('')
+  }</tr></thead><tbody>${
+    sorted.map(r => `<tr>${PRODUCT_BREAKDOWN_COLUMNS.map(c => `<td>${c.render ? c.render(r) : (r[c.key] ?? '')}</td>`).join('')}</tr>`).join('')
+  }</tbody></table>`;
+}
+
+async function toggleProductBranchBreakdown(btn) {
+  const detailRow = btn.closest('tr')?.nextElementSibling;
+  if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
+  const isOpen = detailRow.style.display !== 'none';
+  if (isOpen) { detailRow.style.display = 'none'; btn.textContent = '+'; btn.setAttribute('aria-label', 'Expand branch breakdown'); return; }
+
+  detailRow.style.display = '';
+  btn.textContent = '−';
+  btn.setAttribute('aria-label', 'Collapse branch breakdown');
+  const content = detailRow.querySelector('[data-branch-breakdown-content]');
+  if (content.dataset.loaded === 'true') return;
+  content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
+  try {
+    const { rows } = await fetchPricingJSON('product-branch-breakdown', { productType: [btn.dataset.product] });
+    content.innerHTML = renderProductBranchBreakdownHTML(rows || []);
+    content.dataset.loaded = 'true';
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[dashboard] toggleProductBranchBreakdown failed:', err);
+    content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
+  }
 }
 
 function renderPricingQuadrantChart(rows) {
@@ -2310,6 +2395,15 @@ function initPricingTabEvents() {
       return;
     }
 
+    const productSummaryTh = e.target.closest('th[data-product-summary-key]');
+    if (productSummaryTh) {
+      const key = productSummaryTh.dataset.productSummaryKey;
+      productSummarySortState = productSummarySortState.key === key
+        ? { key, dir: productSummarySortState.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' };
+      renderPricingProductSummaryTable(lastPricingByProduct);
+      return;
+    }
+
     const pivotTh = e.target.closest('th[data-pivot-key]');
     if (pivotTh) {
       const raw = pivotTh.dataset.pivotKey;
@@ -2324,6 +2418,9 @@ function initPricingTabEvents() {
 
     const agedDrillBtn = e.target.closest('button[data-action="toggle-aged-drilldown"]');
     if (agedDrillBtn) { toggleAgedDrillDown(agedDrillBtn); return; }
+
+    const breakdownBtn = e.target.closest('button[data-action="toggle-product-breakdown"]');
+    if (breakdownBtn) { toggleProductBranchBreakdown(breakdownBtn); return; }
 
     const pageBtn = e.target.closest('button[data-drill-page]');
     if (pageBtn) {

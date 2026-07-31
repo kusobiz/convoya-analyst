@@ -107,6 +107,7 @@ export function getPricingOverview(filters = {}) {
   const byProduct = getDb().prepare(`
     SELECT
       COALESCE(TRIM("Material Type Desc."), 'Unknown') AS productType,
+      SUM("Total Stock Case") AS totalStock,
       AVG("Unit Price") AS avgPrice,
       COUNT(*)          AS lotCount
     FROM master_stock
@@ -135,6 +136,30 @@ export function getPricingOverview(filters = {}) {
   `).all(...rangeParams);
 
   return { overall, byProduct, priceRangeDistribution };
+}
+
+// Per-Branch breakdown of unsold (OPEN) stock for one Product Type — feeds the expandable
+// "+" row under the Overview's Product Type Summary. Unsold Units/Balance Value are OPEN-only
+// sums, but Sell-through % still comes from the full stock/sold ratio across all statuses,
+// same historical-performance convention used everywhere else (see getPricingQuadrant).
+export function getProductBranchBreakdown(filters = {}) {
+  const { productType } = filters;
+  const { where, params } = whereClause({ productType });
+
+  return getDb().prepare(`
+    SELECT
+      TRIM("Branch") AS branch,
+      SUM(CASE WHEN UPPER(TRIM("Status")) = 'OPEN' THEN "Total Stock Case" ELSE 0 END)     AS unsoldUnits,
+      SUM(CASE WHEN UPPER(TRIM("Status")) = 'OPEN' THEN "Total Balance Amount" ELSE 0 END) AS unsoldBalanceValue,
+      CASE WHEN SUM("Total Stock Case") > 0
+        THEN 100.0 * SUM("Total Sold Case") / SUM("Total Stock Case")
+        ELSE 0 END AS sellThrough
+    FROM master_stock
+    ${where}
+    GROUP BY TRIM("Branch")
+    HAVING unsoldUnits > 0
+    ORDER BY TRIM("Branch")
+  `).all(...params);
 }
 
 export function getPricingQuadrant(filters = {}) {
@@ -327,6 +352,16 @@ router.post('/overview', (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Pricing overview error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/product-branch-breakdown', (req, res) => {
+  try {
+    const rows = getProductBranchBreakdown(req.body || {});
+    res.json({ rows });
+  } catch (err) {
+    console.error('Pricing product-branch-breakdown error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
