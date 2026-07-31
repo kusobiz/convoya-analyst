@@ -1486,6 +1486,19 @@ const PRODUCT_BREAKDOWN_COLUMNS = [
   { key: 'sellThrough',         label: 'Sell-through %',       render: r => pct(r.sellThrough) },
 ];
 
+// Zone Breakdown (Aged Inventory + the 4 category tables) shares the exact same shape as the
+// Overview's Branch breakdown, just grouped by Zone instead of Branch.
+const ZONE_BREAKDOWN_COLUMNS = [
+  { key: 'zone',                label: 'Zone' },
+  { key: 'unsoldUnits',         label: 'Unsold Units',         render: r => fmt(r.unsoldUnits) },
+  { key: 'unsoldBalanceValue',  label: 'Unsold Balance Value', render: r => myr(r.unsoldBalanceValue) },
+  { key: 'sellThrough',         label: 'Sell-through %',       render: r => pct(r.sellThrough) },
+];
+
+// Global distinct Lot Type values (SINGLE/DOUBLE/FAMILY/etc.), fetched once and reused by
+// every row's Lot Type filter dropdown across all 5 tables — narrows the View Lots list only.
+let pricingLotTypeOptions = [];
+
 // ── Pricing drill-down (Lot Drill-Down reuse) ──
 // Compact lot columns shown in the expandable drill-down panels/accordions. "Suite"/"Section"
 // are only meaningful for structured product types (Niche/Pedestal/etc.) — flat land types
@@ -1710,17 +1723,19 @@ let pricingFilters = { branch: [], productType: [] };
 let pricingLoaded = false;
 let productSummarySortState = { key: 'productType', dir: 'asc' };
 
-// Sweet Spot / Low-Hanging Fruit had no default sort at all (key: null → whatever order the
-// backend happened to return) until this row was audited — Branch asc now matches the
-// convention set by the View Lots drill-down. Long-Ignored Gem / Dead Stock already had a
-// deliberate, sensible default (worst balance value first) so those are left as-is.
+// Every Pricing Intelligence table defaults to ascending sort by its first meaningful
+// column, applied before first render (not just wired to header clicks) — Branch for the
+// 4 category tables (matches the View Lots drill-down's own Branch-asc convention), Product
+// Type for Aged Inventory. Previously Long-Ignored Gem / Dead Stock / Aged Inventory
+// defaulted to a value-descending sort instead — flipped here for consistency across every
+// table in the tab.
 const pricingCategorySortState = {
-  sweet_spot:        { key: 'branch',       dir: 'asc' },
-  low_hanging_fruit: { key: 'branch',       dir: 'asc' },
-  long_ignored_gem:  { key: 'balanceValue', dir: 'desc' },
-  dead_stock:        { key: 'balanceValue', dir: 'desc' },
+  sweet_spot:        { key: 'branch', dir: 'asc' },
+  low_hanging_fruit: { key: 'branch', dir: 'asc' },
+  long_ignored_gem:  { key: 'branch', dir: 'asc' },
+  dead_stock:        { key: 'branch', dir: 'asc' },
 };
-let agedSortState = { key: 'balanceValueOver365', dir: 'desc' };
+let agedSortState = { key: 'productType', dir: 'asc' };
 
 const pricingFiltersUI = {};
 
@@ -1735,15 +1750,16 @@ async function refreshPricingCascade() {
   updatePricingGateState();
 }
 
-// Branch + Product Type are required prerequisites for the rest of the tab: Min Stock,
-// Search, and the Pivot Builder's Rows/Columns/Metric + Generate Matrix all stay disabled
-// (with a helper message) until at least one of each is picked.
+// Branch + Product Type are required prerequisites for Min Stock + Search (which drive the
+// Quadrant Chart, Category Breakdown tables, and Aged Inventory). The Cross-Analysis Pivot
+// Builder deliberately has its own separate, non-gated Branch/Product Type filters — see
+// pivotFiltersUI — so it is NOT included here.
 function updatePricingGateState() {
   const branch = pricingFiltersUI.branch?.getValues() || [];
   const productType = pricingFiltersUI.productType?.getValues() || [];
   const ready = branch.length > 0 && productType.length > 0;
 
-  ['pricingMinStock', 'btnPricingSearch', 'pivotRows', 'pivotCols', 'pivotMetric', 'btnPivotGenerate'].forEach(id => {
+  ['pricingMinStock', 'btnPricingSearch'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = !ready;
   });
@@ -1819,16 +1835,21 @@ function renderPricingProductSummaryTable(rows) {
   }).join('');
 }
 
-function renderProductBranchBreakdownHTML(rows) {
-  if (!rows.length) return `<div class="drilldown-empty">No unsold (OPEN) lots for this product.</div>`;
-  // Fixed default: most unsold units first — this mini-table isn't user-sortable, it always
-  // answers "which branch has the most unsold stock for this product" at a glance.
-  const sorted = [...rows].sort((a, b) => b.unsoldUnits - a.unsoldUnits);
+// Shared by the Overview's Branch breakdown and the per-row Zone breakdown — both are small
+// fixed-sort (not user-sortable) aggregate tables, most-unsold-units-first by default, so
+// they answer "where is the unsold stock" at a glance without another header-click.
+function renderBreakdownTableHTML(rows, columns, sortKey, emptyMessage) {
+  if (!rows.length) return `<div class="drilldown-empty">${emptyMessage}</div>`;
+  const sorted = [...rows].sort((a, b) => b[sortKey] - a[sortKey]);
   return `<table class="drilldown-table"><thead><tr>${
-    PRODUCT_BREAKDOWN_COLUMNS.map(c => `<th>${c.label}</th>`).join('')
+    columns.map(c => `<th>${c.label}</th>`).join('')
   }</tr></thead><tbody>${
-    sorted.map(r => `<tr>${PRODUCT_BREAKDOWN_COLUMNS.map(c => `<td>${c.render ? c.render(r) : (r[c.key] ?? '')}</td>`).join('')}</tr>`).join('')
+    sorted.map(r => `<tr>${columns.map(c => `<td>${c.render ? c.render(r) : (r[c.key] ?? '')}</td>`).join('')}</tr>`).join('')
   }</tbody></table>`;
+}
+
+function renderProductBranchBreakdownHTML(rows) {
+  return renderBreakdownTableHTML(rows, PRODUCT_BREAKDOWN_COLUMNS, 'unsoldUnits', 'No unsold (OPEN) lots for this product.');
 }
 
 async function toggleProductBranchBreakdown(btn) {
@@ -1851,6 +1872,83 @@ async function toggleProductBranchBreakdown(btn) {
     if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
     console.error('[dashboard] toggleProductBranchBreakdown failed:', err);
     content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
+  }
+}
+
+// ── Zone Breakdown (Aged Inventory + all 4 category tables) ──
+// Each data row renders two accordion-detail rows in sequence: View Lots first, Zone
+// Breakdown second — so the Zone Breakdown toggle always targets the row two siblings down
+// from the accordion-row, regardless of which table it's in.
+async function toggleZoneBreakdown(btn, filters) {
+  const detailRow = btn.closest('tr')?.nextElementSibling?.nextElementSibling;
+  if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
+  const isOpen = detailRow.style.display !== 'none';
+  if (isOpen) { detailRow.style.display = 'none'; btn.textContent = '+'; btn.setAttribute('aria-label', 'Zone breakdown'); return; }
+
+  detailRow.style.display = '';
+  btn.textContent = '−';
+  btn.setAttribute('aria-label', 'Hide zone breakdown');
+  const content = detailRow.querySelector('[data-zone-breakdown-content]');
+  if (content.dataset.loaded === 'true') return;
+  content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
+  try {
+    const { rows } = await fetchPricingJSON('zone-breakdown', filters);
+    content.innerHTML = renderBreakdownTableHTML(rows || [], ZONE_BREAKDOWN_COLUMNS, 'unsoldUnits', 'No unsold (OPEN) lots for this combination.');
+    content.dataset.loaded = 'true';
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[dashboard] toggleZoneBreakdown failed:', err);
+    content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
+  }
+}
+
+// ── Lot Type filter (per row, narrows the View Lots list only) ──
+function renderLotTypeFilterHTML() {
+  const opts = pricingLotTypeOptions.map(lt =>
+    `<label class="lot-type-option"><input type="checkbox" value="${escapeHtml(lt)}"> ${escapeHtml(lt)}</label>`).join('');
+  return `<details class="lot-type-filter" data-lot-type-filter>
+    <summary>Lot Type: All</summary>
+    <div class="lot-type-filter-panel">${opts || '<div class="ms-empty">No lot types</div>'}</div>
+  </details>`;
+}
+
+function lotTypeFilterValues(rowEl) {
+  return [...rowEl.querySelectorAll('[data-lot-type-filter] input:checked')].map(cb => cb.value);
+}
+
+function updateLotTypeFilterSummary(details) {
+  const summary = details.querySelector('summary');
+  if (!summary) return;
+  const checked = [...details.querySelectorAll('input:checked')].map(cb => cb.value);
+  summary.textContent = checked.length === 0 ? 'Lot Type: All'
+    : checked.length <= 2 ? `Lot Type: ${checked.join(', ')}`
+    : `Lot Type: ${checked.length} selected`;
+}
+
+// Checking/unchecking a Lot Type option invalidates the row's View Lots cache; if the panel
+// is currently open it's refetched in place (not closed) so the narrowed list appears live.
+function onLotTypeFilterChanged(details) {
+  updateLotTypeFilterSummary(details);
+  const row = details.closest('tr');
+  const detailRow = row?.nextElementSibling;
+  const content = detailRow?.querySelector('[data-drill-content]');
+  if (!content) return;
+  content.dataset.loaded = 'false';
+  if (detailRow.style.display === 'none') return;
+  const viewLotsBtn = row.querySelector('button[data-action="toggle-drilldown"], button[data-action="toggle-aged-drilldown"]');
+  if (!viewLotsBtn) return;
+  if (viewLotsBtn.dataset.action === 'toggle-aged-drilldown') loadAgedDrillDownContent(viewLotsBtn, content);
+  else loadCategoryDrillDownContent(viewLotsBtn, content);
+}
+
+async function fetchGlobalLotTypeOptions() {
+  try {
+    const res = await fetch('/api/lots/lotTypes');
+    if (!res.ok) return;
+    const { lotTypes } = await res.json();
+    pricingLotTypeOptions = lotTypes || [];
+  } catch (e) {
+    console.error('[dashboard] fetchGlobalLotTypeOptions failed:', e);
   }
 }
 
@@ -1986,10 +2084,13 @@ function renderPricingCategoryTable(category, rows) {
   }
   tbody.innerHTML = sorted.map(r => {
     const cells = PRICING_TABLE_COLUMNS.map(col => `<td>${col.render ? col.render(r) : (r[col.key] ?? '')}</td>`).join('');
-    const btn = `<button type="button" class="btn-view-lots" data-action="toggle-drilldown"
+    const viewLotsBtn = `<button type="button" class="btn-view-lots" data-action="toggle-drilldown"
       data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}" data-price-range="${escapeHtml(r.priceRange)}" data-category="${escapeHtml(category)}">View Lots</button>`;
-    return `<tr class="accordion-row">${cells}<td>${btn}</td></tr>
-      <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>`;
+    const zoneBtn = `<button type="button" class="btn-expand" data-action="toggle-zone-breakdown"
+      data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}" data-price-range="${escapeHtml(r.priceRange)}" aria-label="Zone breakdown">+</button>`;
+    return `<tr class="accordion-row">${cells}<td><div class="row-actions">${renderLotTypeFilterHTML()}${viewLotsBtn}${zoneBtn}</div></td></tr>
+      <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>
+      <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-zone-breakdown-content></div></td></tr>`;
   }).join('');
 }
 
@@ -2019,10 +2120,13 @@ function renderAgedInventoryTable(rows) {
   tbody.innerHTML = sorted.map(r => {
     const cls = r.avgAgeDays > 730 ? ' class="row-amber"' : '';
     const cells = AGED_INVENTORY_COLUMNS.map(col => `<td>${col.render ? col.render(r) : (r[col.key] ?? '')}</td>`).join('');
-    const btn = `<button type="button" class="btn-view-lots" data-action="toggle-aged-drilldown"
+    const viewLotsBtn = `<button type="button" class="btn-view-lots" data-action="toggle-aged-drilldown"
       data-product="${escapeHtml(r.productType)}" data-price-range="${escapeHtml(r.priceRange)}">View Lots</button>`;
-    return `<tr${cls}>${cells}<td>${btn}</td></tr>
-      <tr class="accordion-detail"${cls} style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>`;
+    const zoneBtn = `<button type="button" class="btn-expand" data-action="toggle-zone-breakdown"
+      data-product="${escapeHtml(r.productType)}" data-price-range="${escapeHtml(r.priceRange)}" aria-label="Zone breakdown">+</button>`;
+    return `<tr${cls}>${cells}<td><div class="row-actions">${renderLotTypeFilterHTML()}${viewLotsBtn}${zoneBtn}</div></td></tr>
+      <tr class="accordion-detail"${cls} style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>
+      <tr class="accordion-detail"${cls} style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-zone-breakdown-content></div></td></tr>`;
   }).join('');
 }
 
@@ -2116,26 +2220,20 @@ function exportPricingQuadrantExcel() {
 }
 
 // ── Category / Aged Inventory accordion drill-downs ──
-// Both tables render each data row immediately followed by a sibling .accordion-detail
-// row holding a [data-drill-content] placeholder — toggling fetches (once, then caches)
-// and fills that placeholder in place, rather than navigating away.
-async function toggleCategoryDrillDown(btn) {
-  const detailRow = btn.closest('tr')?.nextElementSibling;
-  if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
-  const isOpen = detailRow.style.display !== 'none';
-  if (isOpen) { detailRow.style.display = 'none'; btn.textContent = 'View Lots'; return; }
-
-  detailRow.style.display = '';
-  btn.textContent = 'Hide Lots';
-  const content = detailRow.querySelector('[data-drill-content]');
-  if (content.dataset.loaded === 'true') return;
+// Both tables render each data row immediately followed by two sibling .accordion-detail
+// rows: View Lots' [data-drill-content] placeholder, then Zone Breakdown's. Loading is split
+// from toggling so the Lot Type filter (see onLotTypeFilterChanged) can force a fresh fetch
+// into an already-open panel without going through the open/close toggle.
+async function loadCategoryDrillDownContent(btn, content) {
   content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
   try {
+    const lotType = lotTypeFilterValues(btn.closest('tr'));
     const { rows, mode } = await fetchLotsDetail({
       materialType: [btn.dataset.product],
       branch: [btn.dataset.branch],
       priceRange: [btn.dataset.priceRange],
       status: ['OPEN'],
+      lotType,
     });
     const totalQty = computeDrillTotalQty(rows);
     const categoryLabel = PRICING_CATEGORY_META[btn.dataset.category]?.label || btn.dataset.category;
@@ -2147,16 +2245,12 @@ async function toggleCategoryDrillDown(btn) {
     content.dataset.loaded = 'true';
   } catch (err) {
     if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
-    console.error('[dashboard] toggleCategoryDrillDown failed:', err);
+    console.error('[dashboard] loadCategoryDrillDownContent failed:', err);
     content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
   }
 }
 
-// Aged Inventory rows have no Branch column (grouped by Product + Price Range only), so
-// the drill-down reuses whatever Branch is currently selected in the tab's Filters card —
-// the same scope that produced the row's aggregated numbers — plus Status=OPEN and the
-// same >365-day age threshold the row's "Count > 365 Days" figure is built from.
-async function toggleAgedDrillDown(btn) {
+async function toggleCategoryDrillDown(btn) {
   const detailRow = btn.closest('tr')?.nextElementSibling;
   if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
   const isOpen = detailRow.style.display !== 'none';
@@ -2166,14 +2260,24 @@ async function toggleAgedDrillDown(btn) {
   btn.textContent = 'Hide Lots';
   const content = detailRow.querySelector('[data-drill-content]');
   if (content.dataset.loaded === 'true') return;
+  await loadCategoryDrillDownContent(btn, content);
+}
+
+// Aged Inventory rows have no Branch column (grouped by Product + Price Range only), so
+// the drill-down reuses whatever Branch is currently selected in the tab's Filters card —
+// the same scope that produced the row's aggregated numbers — plus Status=OPEN and the
+// same >365-day age threshold the row's "Count > 365 Days" figure is built from.
+async function loadAgedDrillDownContent(btn, content) {
   content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
   try {
+    const lotType = lotTypeFilterValues(btn.closest('tr'));
     const { rows, mode } = await fetchLotsDetail({
       materialType: [btn.dataset.product],
       priceRange: [btn.dataset.priceRange],
       branch: pricingFilters.branch,
       status: ['OPEN'],
       minAgeDays: 365,
+      lotType,
     });
     const totalQty = computeDrillTotalQty(rows);
     renderDrillDownPanel(content, {
@@ -2184,9 +2288,22 @@ async function toggleAgedDrillDown(btn) {
     content.dataset.loaded = 'true';
   } catch (err) {
     if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
-    console.error('[dashboard] toggleAgedDrillDown failed:', err);
+    console.error('[dashboard] loadAgedDrillDownContent failed:', err);
     content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
   }
+}
+
+async function toggleAgedDrillDown(btn) {
+  const detailRow = btn.closest('tr')?.nextElementSibling;
+  if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
+  const isOpen = detailRow.style.display !== 'none';
+  if (isOpen) { detailRow.style.display = 'none'; btn.textContent = 'View Lots'; return; }
+
+  detailRow.style.display = '';
+  btn.textContent = 'Hide Lots';
+  const content = detailRow.querySelector('[data-drill-content]');
+  if (content.dataset.loaded === 'true') return;
+  await loadAgedDrillDownContent(btn, content);
 }
 
 // ── Cross-Analysis Pivot Builder ──
@@ -2228,6 +2345,23 @@ function onPivotColsChange() {
   syncPivotDimensionOptions();
 }
 
+// Pivot Builder gets its own independent Branch + Product Type filters — separate from
+// pricingFiltersUI (Quadrant/Category/Aged Inventory). These are optional scoping filters,
+// never a hard gate: empty means "all branches/products," and Generate Matrix only ever
+// depends on Rows/Columns/Metric being selected (always true — they're single-selects with
+// defaults, never blank) plus the rowDimension !== colDimension check above.
+const pivotFiltersUI = {};
+
+async function refreshPivotCascade() {
+  const branch = pivotFiltersUI.branch.getValues();
+  try {
+    const { productTypes } = await fetchPricingJSON('filters', { branch });
+    pivotFiltersUI.productType.setOptions(productTypes || []);
+  } catch (e) {
+    console.error('[dashboard] refreshPivotCascade failed:', e);
+  }
+}
+
 function initPricingPivotControls() {
   const rowsSel = document.getElementById('pivotRows');
   const colsSel = document.getElementById('pivotCols');
@@ -2242,6 +2376,19 @@ function initPricingPivotControls() {
   syncPivotDimensionOptions();
   rowsSel.addEventListener('change', onPivotRowsChange);
   colsSel.addEventListener('change', onPivotColsChange);
+
+  pivotFiltersUI.branch = new MultiSelect('pivotBranch', {
+    placeholder: 'All branches',
+    onChange: refreshPivotCascade,
+  });
+  pivotFiltersUI.productType = new MultiSelect('pivotProductType', {
+    placeholder: 'All products',
+    displayFn: stripNVPrefix,
+  });
+  fetchPricingJSON('filters', {}).then(({ branches, productTypes }) => {
+    pivotFiltersUI.branch.setOptions(branches || []);
+    pivotFiltersUI.productType.setOptions(productTypes || []);
+  }).catch(e => console.error('[dashboard] initPricingPivotControls filters failed:', e));
 }
 
 function pivotMetricText(metric, value) {
@@ -2310,7 +2457,6 @@ function renderPricingPivotTable() {
 }
 
 async function generatePricingPivot() {
-  if (!updatePricingGateState()) return;
   const rowDimension = document.getElementById('pivotRows')?.value;
   const colDimension = document.getElementById('pivotCols')?.value;
   const metric = document.getElementById('pivotMetric')?.value;
@@ -2325,11 +2471,17 @@ async function generatePricingPivot() {
   try {
     const result = await fetchPricingJSON('pivot', {
       rowDimension, colDimension, metric,
-      branch: pricingFiltersUI.branch.getValues(),
-      productType: pricingFiltersUI.productType.getValues(),
+      branch: pivotFiltersUI.branch.getValues(),
+      productType: pivotFiltersUI.productType.getValues(),
     });
+    // Re-fetching (e.g. just changing the Branch/Product Type scope) shouldn't reset a
+    // sort the user already picked — only reset when the Rows/Columns dimensions actually
+    // changed, since a sort key from the old dimensions wouldn't make sense against the new ones.
+    const dimensionsChanged = !lastPivotResult
+      || lastPivotResult.rowDimension !== rowDimension
+      || lastPivotResult.colDimension !== colDimension;
     lastPivotResult = result;
-    pivotSortState = { key: null, dir: 'asc' };
+    if (dimensionsChanged) pivotSortState = { key: null, dir: 'asc' };
     renderPricingPivotTable();
   } catch (err) {
     if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
@@ -2422,6 +2574,20 @@ function initPricingTabEvents() {
     const breakdownBtn = e.target.closest('button[data-action="toggle-product-breakdown"]');
     if (breakdownBtn) { toggleProductBranchBreakdown(breakdownBtn); return; }
 
+    const zoneBtn = e.target.closest('button[data-action="toggle-zone-breakdown"]');
+    if (zoneBtn) {
+      // Category-table rows set data-branch on this button; Aged Inventory rows don't
+      // (Aged rows have no single Branch — they fall back to the tab's own Branch filter).
+      const filters = zoneBtn.dataset.branch !== undefined
+        ? { branch: [zoneBtn.dataset.branch], productType: [zoneBtn.dataset.product], priceRange: [zoneBtn.dataset.priceRange] }
+        : { productType: [zoneBtn.dataset.product], priceRange: [zoneBtn.dataset.priceRange], branch: pricingFilters.branch, minAgeDays: 365 };
+      toggleZoneBreakdown(zoneBtn, filters);
+      return;
+    }
+
+    const lotTypeCb = e.target.closest('[data-lot-type-filter] input[type="checkbox"]');
+    if (lotTypeCb) { onLotTypeFilterChanged(lotTypeCb.closest('[data-lot-type-filter]')); return; }
+
     const pageBtn = e.target.closest('button[data-drill-page]');
     if (pageBtn) {
       const content = pageBtn.closest('[data-drill-content]');
@@ -2448,6 +2614,7 @@ function onPricingTabActivated() {
   pricingLoaded = true;
   updatePricingGateState();
   loadPricingOverviewKPIs([], []);
+  fetchGlobalLotTypeOptions();
 }
 
 initPricingFilters();

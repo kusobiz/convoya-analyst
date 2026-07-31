@@ -494,6 +494,14 @@
         <h3 class="table-title">Cross-Analysis Pivot Builder</h3>
         <div class="lot-filter-row">
           <div class="lot-filter-field">
+            <label class="lot-filter-label" for="pivotBranch">Branch</label>
+            <div class="ms" id="pivotBranch"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="pivotProductType">Product Type</label>
+            <div class="ms" id="pivotProductType"></div>
+          </div>
+          <div class="lot-filter-field">
             <label class="lot-filter-label" for="pivotRows">Rows</label>
             <select id="pivotRows" class="branch-select"></select>
           </div>
@@ -512,7 +520,8 @@
             <span>&#11015;</span> Export as Excel
           </button>
         </div>
-        <p class="lot-filter-help pricing-gate-message" id="pivotGateMessage">Select at least one Branch and Product Type (in Filters above) to begin.</p>
+        <p class="lot-filter-help">Branch and Product Type here are independent, optional scoping filters for the
+          Pivot Builder only — leave them empty to run the matrix across all branches/products.</p>
         <div class="matrix-header" id="pivotHeader"></div>
         <div class="table-scroll">
           <table id="tablePivot">

@@ -94,6 +94,7 @@ const LOT_CREATE_DATE_EXPR = `(
   substr(CAST("Lot Create On" AS TEXT), 5, 2) || '-' ||
   substr(CAST("Lot Create On" AS TEXT), 7, 2)
 )`;
+const AGE_DAYS_EXPR = `CAST(julianday('now') - julianday(${LOT_CREATE_DATE_EXPR}) AS INTEGER)`;
 
 export function getPricingOverview(filters = {}) {
   const { where, params } = whereClause(filters);
@@ -159,6 +160,35 @@ export function getProductBranchBreakdown(filters = {}) {
     GROUP BY TRIM("Branch")
     HAVING unsoldUnits > 0
     ORDER BY TRIM("Branch")
+  `).all(...params);
+}
+
+// Per-Zone breakdown of unsold (OPEN) stock, scoped to one row's own combo (Branch, Product
+// Type, Price Range for the 4 category tables; Product Type, Price Range, Branch(es) +
+// minAgeDays for Aged Inventory) — feeds the "Zone Breakdown" expand button next to View
+// Lots. Same OPEN-only units/value + all-statuses sell-through convention as
+// getProductBranchBreakdown.
+export function getZoneBreakdown(filters = {}) {
+  const { branch, productType, priceRange, minAgeDays } = filters;
+  const extra = [REAL_PRICE_RANGE];
+  if (minAgeDays !== undefined && minAgeDays !== null && minAgeDays !== '') {
+    extra.push(`${AGE_DAYS_EXPR} > ${Number(minAgeDays)}`);
+  }
+  const { where, params } = whereClause({ branch, productType, priceRange }, extra);
+
+  return getDb().prepare(`
+    SELECT
+      COALESCE(TRIM("Zone"), 'Unknown') AS zone,
+      SUM(CASE WHEN UPPER(TRIM("Status")) = 'OPEN' THEN "Total Stock Case" ELSE 0 END)     AS unsoldUnits,
+      SUM(CASE WHEN UPPER(TRIM("Status")) = 'OPEN' THEN "Total Balance Amount" ELSE 0 END) AS unsoldBalanceValue,
+      CASE WHEN SUM("Total Stock Case") > 0
+        THEN 100.0 * SUM("Total Sold Case") / SUM("Total Stock Case")
+        ELSE 0 END AS sellThrough
+    FROM master_stock
+    ${where}
+    GROUP BY TRIM("Zone")
+    HAVING unsoldUnits > 0
+    ORDER BY TRIM("Zone")
   `).all(...params);
 }
 
@@ -362,6 +392,16 @@ router.post('/product-branch-breakdown', (req, res) => {
     res.json({ rows });
   } catch (err) {
     console.error('Pricing product-branch-breakdown error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/zone-breakdown', (req, res) => {
+  try {
+    const rows = getZoneBreakdown(req.body || {});
+    res.json({ rows });
+  } catch (err) {
+    console.error('Pricing zone-breakdown error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
