@@ -406,6 +406,12 @@ tbody td {
 .btn-report:hover { background: #243d7a; }
 .btn-report:active { transform: scale(0.97); }
 .btn-report span { font-size: 1rem; }
+.btn-report:disabled {
+  background: var(--muted);
+  cursor: not-allowed;
+  transform: none;
+}
+.btn-report:disabled:hover { background: var(--muted); }
 
 .branch-report-row {
   display: flex;
@@ -842,6 +848,78 @@ table.drilldown-table thead th {
 }
 table.drilldown-table tbody td {
   padding: 0.45rem 0.7rem;
+}
+
+.drilldown-title-line {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--navy);
+  padding: 0 0 0.6rem;
+}
+
+.drilldown-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding-bottom: 0.6rem;
+  margin-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+.drilldown-toolbar-count {
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+.drilldown-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+.drill-page-size {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.drill-page-btn {
+  padding: 0.25rem 0.6rem;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--white);
+  color: var(--navy);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.drill-page-btn:last-child { border-right: none; }
+.drill-page-btn:hover { background: var(--bg); }
+.drill-page-btn.active { background: var(--navy); color: var(--white); }
+
+tr.drill-group-row td {
+  font-weight: 700;
+  font-size: 0.76rem;
+  color: var(--navy);
+}
+tr.drill-group-branch td {
+  background: #dfe6f5;
+  padding: 0.4rem 0.7rem;
+  border-top: 1px solid var(--border);
+}
+tr.drill-group-lottype td {
+  background: #eef2fb;
+  padding: 0.32rem 0.7rem 0.32rem 1.4rem;
+  font-size: 0.72rem;
+}
+.drill-group-count {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.pricing-gate-message {
+  color: var(--amber);
+  font-weight: 600;
 }
 
 /* ── AI Query Tab ── */

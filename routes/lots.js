@@ -148,6 +148,7 @@ export function queryLotsDetail(filters = {}) {
     return getDb().prepare(`
       SELECT
         TRIM("Material No")                        AS materialNo,
+        COALESCE(TRIM("Branch"), 'Unknown')        AS branch,
         COALESCE(TRIM("Material Type Desc."), 'Unknown') AS materialType,
         COALESCE(TRIM("Lot Type"), 'Unknown')      AS lotType,
         COALESCE(UPPER(TRIM("Status")), 'UNKNOWN') AS status,
@@ -158,14 +159,15 @@ export function queryLotsDetail(filters = {}) {
         COUNT(*)                    AS lotCount
       FROM master_stock
       ${fullWhere}
-      GROUP BY TRIM("Material No"), TRIM("Material Type Desc."), TRIM("Lot Type"), UPPER(TRIM("Status"))
-      ORDER BY TRIM("Lot Type"), TRIM("Material No")
+      GROUP BY TRIM("Material No"), TRIM("Branch"), TRIM("Material Type Desc."), TRIM("Lot Type"), UPPER(TRIM("Status"))
+      ORDER BY TRIM("Branch"), TRIM("Lot Type"), TRIM("Material No")
     `).all(...params);
   }
 
   return getDb().prepare(`
     SELECT
       TRIM("Material No")                        AS materialNo,
+      COALESCE(TRIM("Branch"), 'Unknown')        AS branch,
       COALESCE(TRIM("Material Type Desc."), 'Unknown') AS materialType,
       COALESCE(TRIM("Zone"), 'Unknown')          AS zone,
       COALESCE(TRIM("Suite No"), 'Unknown')      AS suiteNo,
@@ -180,8 +182,8 @@ export function queryLotsDetail(filters = {}) {
       COUNT(*)                    AS lotCount
     FROM master_stock
     ${fullWhere}
-    GROUP BY TRIM("Material No"), TRIM("Material Type Desc."), TRIM("Zone"), TRIM("Suite No"), TRIM("Section"), TRIM("Level No"), TRIM("Lot Type"), UPPER(TRIM("Status"))
-    ORDER BY TRIM("Zone"), TRIM("Suite No"), TRIM("Section"), TRIM("Level No"), TRIM("Material No")
+    GROUP BY TRIM("Material No"), TRIM("Branch"), TRIM("Material Type Desc."), TRIM("Zone"), TRIM("Suite No"), TRIM("Section"), TRIM("Level No"), TRIM("Lot Type"), UPPER(TRIM("Status"))
+    ORDER BY TRIM("Branch"), TRIM("Zone"), TRIM("Suite No"), TRIM("Section"), TRIM("Level No"), TRIM("Material No")
   `).all(...params);
 }
 

@@ -1475,19 +1475,20 @@ const AGED_INVENTORY_COLUMNS = [
 // Compact lot columns shown in the expandable drill-down panels/accordions. "Suite"/"Section"
 // are only meaningful for structured product types (Niche/Pedestal/etc.) — flat land types
 // (Burial Plot/Seed/etc.) have no such hierarchy, so they get their own, shorter column set.
+// Branch and Lot Type are the two grouping levels the drill-down table nests lots under
+// (see sortAndGroupDrillRows), so they're rendered as group-header rows rather than repeated
+// as a column on every lot row.
 const DRILLDOWN_LOT_COLUMNS_STRUCTURED = [
   { key: 'materialNo',          label: 'Material No' },
   { key: 'zone',                label: 'Zone' },
   { key: 'suiteNo',             label: 'Suite' },
   { key: 'section',             label: 'Section' },
   { key: 'level',                label: 'Level' },
-  { key: 'lotType',              label: 'Lot Type' },
   { key: 'status',               label: 'Status', render: r => `<span class="badge ${lotStatusBadgeClass(r.status)}">${r.status}</span>` },
   { key: 'totalBalanceAmount',  label: 'Balance Amount', render: r => myr(r.totalBalanceAmount) },
 ];
 const DRILLDOWN_LOT_COLUMNS_FLAT = [
   { key: 'materialNo',          label: 'Material No' },
-  { key: 'lotType',              label: 'Lot Type' },
   { key: 'status',               label: 'Status', render: r => `<span class="badge ${lotStatusBadgeClass(r.status)}">${r.status}</span>` },
   { key: 'totalBalanceAmount',  label: 'Balance Amount', render: r => myr(r.totalBalanceAmount) },
 ];
@@ -1510,16 +1511,152 @@ async function fetchLotsDetail(filters) {
   return res.json();
 }
 
-function renderCompactLotTableHTML(rows, mode) {
-  const columns = mode === 'flat' ? DRILLDOWN_LOT_COLUMNS_FLAT : DRILLDOWN_LOT_COLUMNS_STRUCTURED;
-  if (!rows.length) {
-    return `<div class="drilldown-empty">No lots match these filters.</div>`;
+// ── Drill-down lot list: Branch → Lot Type grouping, pagination, Excel export ──
+// Every "View Lots" panel (quadrant click, the 4 category tables, Aged Inventory) renders
+// through this shared machinery so they behave identically: sorted Branch asc → Lot Type asc
+// → Material No asc, with a sub-header row inserted before each Lot Type's lots.
+const DRILL_PAGE_SIZES = [10, 25, 50];
+
+function computeDrillTotalQty(rows) {
+  return rows.reduce((s, r) => s + (Number(r.totalStock) || 0), 0);
+}
+
+// Sorts rows into Branch → Lot Type order, then buckets them into nested Maps (which
+// preserve first-insertion order, so the bucketing walk below yields the same order the
+// initial sort produced — no separate sort-of-groups step needed).
+function sortAndGroupDrillRows(rows) {
+  const sorted = [...rows].sort((a, b) =>
+    naturalCompare(a.branch, b.branch) ||
+    naturalCompare(a.lotType, b.lotType) ||
+    naturalCompare(a.materialNo, b.materialNo));
+
+  const branchMap = new Map();
+  for (const r of sorted) {
+    if (!branchMap.has(r.branch)) branchMap.set(r.branch, new Map());
+    const lotTypeMap = branchMap.get(r.branch);
+    if (!lotTypeMap.has(r.lotType)) lotTypeMap.set(r.lotType, []);
+    lotTypeMap.get(r.lotType).push(r);
   }
+
+  const seq = [];
+  for (const [branch, lotTypeMap] of branchMap) {
+    let branchCount = 0;
+    for (const lotRows of lotTypeMap.values()) branchCount += lotRows.length;
+    seq.push({ type: 'branch', branch, count: branchCount });
+    for (const [lotType, lotRows] of lotTypeMap) {
+      seq.push({ type: 'lotType', lotType, count: lotRows.length });
+      for (const row of lotRows) seq.push({ type: 'row', row });
+    }
+  }
+  return seq;
+}
+
+// Keeps every group header needed to introduce the lot rows it lets through, and stops
+// scanning entirely once `pageSize` lot rows have been emitted (no headers dangle with
+// zero rows under them).
+function paginateDrillSeq(seq, pageSize) {
+  if (pageSize === 'all') return seq;
+  const out = [];
+  let shown = 0;
+  for (const item of seq) {
+    out.push(item);
+    if (item.type === 'row') {
+      shown++;
+      if (shown >= pageSize) break;
+    }
+  }
+  return out;
+}
+
+function renderDrillGroupedTableHTML(seq, columns) {
+  if (!seq.length) return `<div class="drilldown-empty">No OPEN lots match these filters.</div>`;
+  const colCount = columns.length;
+  const body = seq.map(item => {
+    if (item.type === 'branch') {
+      return `<tr class="drill-group-row drill-group-branch"><td colspan="${colCount}">Branch: ${escapeHtml(item.branch)} <span class="drill-group-count">(${item.count} lot${item.count === 1 ? '' : 's'})</span></td></tr>`;
+    }
+    if (item.type === 'lotType') {
+      return `<tr class="drill-group-row drill-group-lottype"><td colspan="${colCount}">Lot Type: ${escapeHtml(item.lotType)} <span class="drill-group-count">(${item.count})</span></td></tr>`;
+    }
+    const r = item.row;
+    return `<tr>${columns.map(c => `<td>${c.render ? c.render(r) : (r[c.key] ?? '')}</td>`).join('')}</tr>`;
+  }).join('');
   return `<table class="drilldown-table"><thead><tr>${
     columns.map(c => `<th>${c.label}</th>`).join('')
-  }</tr></thead><tbody>${
-    rows.map(r => `<tr>${columns.map(c => `<td>${c.render ? c.render(r) : (r[c.key] ?? '')}</td>`).join('')}</tr>`).join('')
-  }</tbody></table>`;
+  }</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+// Per-panel state (rows, mode, current page size) keyed by a synthetic id stamped onto the
+// panel's content element — several accordions can be expanded at once, each with its own
+// page size, so this can't live in a single shared variable.
+const drillDownState = new Map();
+let drillDownIdSeq = 0;
+
+function renderDrillDownPanel(content, { rows, mode, titleLine, filenameBase }) {
+  if (!content.dataset.drillId) content.dataset.drillId = `drill${++drillDownIdSeq}`;
+  drillDownState.set(content.dataset.drillId, { rows, mode, pageSize: 10, titleLine, filenameBase });
+  renderDrillDownFromState(content);
+}
+
+function renderDrillDownFromState(content) {
+  const state = drillDownState.get(content.dataset.drillId);
+  if (!state) return;
+  const { rows, mode, pageSize, titleLine } = state;
+  const columns = mode === 'flat' ? DRILLDOWN_LOT_COLUMNS_FLAT : DRILLDOWN_LOT_COLUMNS_STRUCTURED;
+  const titleHtml = titleLine ? `<div class="drilldown-title-line">${titleLine}</div>` : '';
+
+  if (!rows.length) {
+    content.innerHTML = `${titleHtml}<div class="drilldown-empty">No OPEN lots match these filters.</div>`;
+    return;
+  }
+
+  const seq = sortAndGroupDrillRows(rows);
+  const visible = paginateDrillSeq(seq, pageSize);
+  const shownLots = pageSize === 'all' ? rows.length : Math.min(pageSize, rows.length);
+
+  const toolbar = `
+    <div class="drilldown-toolbar">
+      <div class="drilldown-toolbar-count">Showing ${fmt(shownLots)} of ${fmt(rows.length)} lots</div>
+      <div class="drilldown-toolbar-actions">
+        <div class="drill-page-size">
+          ${DRILL_PAGE_SIZES.map(n => `<button type="button" class="drill-page-btn${pageSize === n ? ' active' : ''}" data-drill-page="${n}">${n}</button>`).join('')}
+          <button type="button" class="drill-page-btn${pageSize === 'all' ? ' active' : ''}" data-drill-page="all">Show All</button>
+        </div>
+        <button type="button" class="btn-view-lots" data-drill-export>Export to Excel</button>
+      </div>
+    </div>`;
+
+  content.innerHTML = `${titleHtml}${toolbar}${renderDrillGroupedTableHTML(visible, columns)}`;
+}
+
+function exportDrillDownExcel(content) {
+  const state = drillDownState.get(content.dataset.drillId);
+  if (!state || !state.rows.length) { alert('No data to export.'); return; }
+  if (typeof XLSX === 'undefined') { alert('Excel export library failed to load — check your connection and try again.'); return; }
+
+  const columns = state.mode === 'flat' ? DRILLDOWN_LOT_COLUMNS_FLAT : DRILLDOWN_LOT_COLUMNS_STRUCTURED;
+  // Export the full matching set (not just whatever page is on screen), in the same
+  // Branch asc / Lot Type asc / Material No asc order the panel groups and sorts by —
+  // Branch/Lot Type become plain columns here since a flat sheet has no group-header rows.
+  const rows = sortAndGroupDrillRows(state.rows).filter(i => i.type === 'row').map(i => i.row);
+
+  const header = ['Branch', 'Lot Type', ...columns.map(c => c.label)];
+  const aoa = [header, ...rows.map(r => [r.branch, r.lotType, ...columns.map(c => r[c.key] ?? '')])];
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = header.map(() => ({ wch: 16 }));
+  const balCol = 2 + columns.findIndex(c => c.key === 'totalBalanceAmount');
+  if (balCol >= 2) {
+    for (let ri = 1; ri < aoa.length; ri++) {
+      const ref = XLSX.utils.encode_cell({ r: ri, c: balCol });
+      if (ws[ref]) ws[ref].z = '"RM "#,##0';
+    }
+  }
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Lots');
+  const base = state.filenameBase || 'drilldown_lots';
+  XLSX.writeFile(wb, `${base}_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 // Generic column-based sorter shared by the category tables and the aged-inventory table.
@@ -1574,22 +1711,43 @@ async function refreshPricingCascade() {
   } catch (e) {
     console.error('[dashboard] refreshPricingCascade failed:', e);
   }
+  updatePricingGateState();
+}
+
+// Branch + Product Type are required prerequisites for the rest of the tab: Min Stock,
+// Search, and the Pivot Builder's Rows/Columns/Metric + Generate Matrix all stay disabled
+// (with a helper message) until at least one of each is picked.
+function updatePricingGateState() {
+  const branch = pricingFiltersUI.branch?.getValues() || [];
+  const productType = pricingFiltersUI.productType?.getValues() || [];
+  const ready = branch.length > 0 && productType.length > 0;
+
+  ['pricingMinStock', 'btnPricingSearch', 'pivotRows', 'pivotCols', 'pivotMetric', 'btnPivotGenerate'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !ready;
+  });
+  document.querySelectorAll('.pricing-gate-message').forEach(el => { el.style.display = ready ? 'none' : ''; });
+
+  return ready;
 }
 
 function initPricingFilters() {
   pricingFiltersUI.branch = new MultiSelect('pricingBranch', {
-    placeholder: 'All branches',
+    placeholder: 'Select branch(es)',
     onChange: refreshPricingCascade,
   });
   pricingFiltersUI.productType = new MultiSelect('pricingProductType', {
-    placeholder: 'All products',
+    placeholder: 'Select product type(s)',
     displayFn: stripNVPrefix,
+    onChange: updatePricingGateState,
   });
 
   fetchPricingJSON('filters', {}).then(({ branches, productTypes }) => {
     pricingFiltersUI.branch.setOptions(branches || []);
     pricingFiltersUI.productType.setOptions(productTypes || []);
   }).catch(e => console.error('[dashboard] initPricingFilters failed:', e));
+
+  updatePricingGateState();
 }
 
 function renderPricingOverviewKPIs(overview, quadrantRows) {
@@ -1692,8 +1850,9 @@ async function openQuadrantDrillDown(row) {
   const content = document.getElementById('quadrantDrillDownContent');
   if (!panel || !content) return;
 
+  const categoryLabel = PRICING_CATEGORY_META[row.category]?.label || row.category;
   panel.style.display = '';
-  title.textContent = `${stripNVPrefix(row.productType)} · ${row.priceRange} · ${row.branch} — Underlying Lots`;
+  title.textContent = `${stripNVPrefix(row.productType)} · ${row.priceRange} · ${row.branch} — ${categoryLabel} — Underlying Lots`;
   content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
   panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
@@ -1704,7 +1863,12 @@ async function openQuadrantDrillDown(row) {
       priceRange: [row.priceRange],
       status: ['OPEN'],
     });
-    content.innerHTML = renderCompactLotTableHTML(rows, mode);
+    const totalQty = computeDrillTotalQty(rows);
+    title.textContent = `${stripNVPrefix(row.productType)} (${fmt(totalQty)} units) · ${row.priceRange} · ${row.branch} — ${categoryLabel} — Underlying Lots`;
+    renderDrillDownPanel(content, {
+      rows, mode,
+      filenameBase: `pricing_lots_${sanitizeForFilename(row.category)}_${sanitizeForFilename(row.productType)}_${sanitizeForFilename(row.branch)}`,
+    });
   } catch (err) {
     if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
     console.error('[dashboard] openQuadrantDrillDown failed:', err);
@@ -1738,7 +1902,7 @@ function renderPricingCategoryTable(category, rows) {
   tbody.innerHTML = sorted.map(r => {
     const cells = PRICING_TABLE_COLUMNS.map(col => `<td>${col.render ? col.render(r) : (r[col.key] ?? '')}</td>`).join('');
     const btn = `<button type="button" class="btn-view-lots" data-action="toggle-drilldown"
-      data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}" data-price-range="${escapeHtml(r.priceRange)}">View Lots</button>`;
+      data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}" data-price-range="${escapeHtml(r.priceRange)}" data-category="${escapeHtml(category)}">View Lots</button>`;
     return `<tr class="accordion-row">${cells}<td>${btn}</td></tr>
       <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>`;
   }).join('');
@@ -1782,7 +1946,27 @@ function switchPricingSubtab(cat) {
   document.querySelectorAll('#tab-pricing .subtab-panel').forEach(panel => panel.classList.toggle('active', panel.id === `subtab-${cat}`));
 }
 
+// Loads just the Overview KPI row (Avg Price / Sell-through / Balance Value / category
+// counts) for a given scope. Unlike renderPricingIntelligence, this is never gated on
+// Branch + Product Type being selected — it's what populates the KPIs across ALL branches
+// and products the moment the tab opens, before the user has picked anything.
+async function loadPricingOverviewKPIs(branch, productType) {
+  const minStockInput = document.getElementById('pricingMinStock');
+  const minStock = Math.max(0, parseInt(minStockInput?.value, 10) || 100);
+  try {
+    const [overview, quadrantRes] = await Promise.all([
+      fetchPricingJSON('overview', { branch, productType }),
+      fetchPricingJSON('quadrant', { branch, productType, minStock }),
+    ]);
+    renderPricingOverviewKPIs(overview, quadrantRes.rows || []);
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[dashboard] loadPricingOverviewKPIs failed:', err);
+  }
+}
+
 async function renderPricingIntelligence() {
+  if (!updatePricingGateState()) return;
   const branch = pricingFiltersUI.branch.getValues();
   const productType = pricingFiltersUI.productType.getValues();
   const minStockInput = document.getElementById('pricingMinStock');
@@ -1868,7 +2052,13 @@ async function toggleCategoryDrillDown(btn) {
       priceRange: [btn.dataset.priceRange],
       status: ['OPEN'],
     });
-    content.innerHTML = renderCompactLotTableHTML(rows, mode);
+    const totalQty = computeDrillTotalQty(rows);
+    const categoryLabel = PRICING_CATEGORY_META[btn.dataset.category]?.label || btn.dataset.category;
+    renderDrillDownPanel(content, {
+      rows, mode,
+      titleLine: `${escapeHtml(stripNVPrefix(btn.dataset.product))} (${fmt(totalQty)} units) · ${escapeHtml(btn.dataset.branch)} · ${escapeHtml(btn.dataset.priceRange)} — ${escapeHtml(categoryLabel)}`,
+      filenameBase: `pricing_lots_${sanitizeForFilename(btn.dataset.category)}_${sanitizeForFilename(btn.dataset.product)}_${sanitizeForFilename(btn.dataset.branch)}`,
+    });
     content.dataset.loaded = 'true';
   } catch (err) {
     if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
@@ -1900,7 +2090,12 @@ async function toggleAgedDrillDown(btn) {
       status: ['OPEN'],
       minAgeDays: 365,
     });
-    content.innerHTML = renderCompactLotTableHTML(rows, mode);
+    const totalQty = computeDrillTotalQty(rows);
+    renderDrillDownPanel(content, {
+      rows, mode,
+      titleLine: `${escapeHtml(stripNVPrefix(btn.dataset.product))} (${fmt(totalQty)} units) · ${escapeHtml(btn.dataset.priceRange)} — Aged Inventory (&gt;365 days)`,
+      filenameBase: `pricing_lots_aged_${sanitizeForFilename(btn.dataset.product)}_${sanitizeForFilename(btn.dataset.priceRange)}`,
+    });
     content.dataset.loaded = 'true';
   } catch (err) {
     if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
@@ -1917,6 +2112,37 @@ let lastPivotResult = null;
 // key: null (unsorted) | 'GROUP' (row label) | a column index (number) | 'TOTAL'
 let pivotSortState = { key: null, dir: 'asc' };
 
+// Rows and Columns must never land on the same dimension — rather than letting the user
+// hit the "must differ" error on Generate, each select disables whichever option the
+// other one currently holds, and picking a value that would collide auto-bumps the other
+// select off of it first.
+function syncPivotDimensionOptions() {
+  const rowsSel = document.getElementById('pivotRows');
+  const colsSel = document.getElementById('pivotCols');
+  if (!rowsSel || !colsSel) return;
+  [...rowsSel.options].forEach(o => { o.disabled = o.value === colsSel.value; });
+  [...colsSel.options].forEach(o => { o.disabled = o.value === rowsSel.value; });
+}
+
+function firstPivotOptionExcluding(sel, avoidValue) {
+  const opt = [...sel.options].find(o => o.value !== avoidValue);
+  return opt ? opt.value : sel.value;
+}
+
+function onPivotRowsChange() {
+  const rowsSel = document.getElementById('pivotRows');
+  const colsSel = document.getElementById('pivotCols');
+  if (rowsSel.value === colsSel.value) colsSel.value = firstPivotOptionExcluding(colsSel, rowsSel.value);
+  syncPivotDimensionOptions();
+}
+
+function onPivotColsChange() {
+  const rowsSel = document.getElementById('pivotRows');
+  const colsSel = document.getElementById('pivotCols');
+  if (colsSel.value === rowsSel.value) rowsSel.value = firstPivotOptionExcluding(rowsSel, colsSel.value);
+  syncPivotDimensionOptions();
+}
+
 function initPricingPivotControls() {
   const rowsSel = document.getElementById('pivotRows');
   const colsSel = document.getElementById('pivotCols');
@@ -1928,6 +2154,9 @@ function initPricingPivotControls() {
   rowsSel.value = 'Eye Level';
   colsSel.value = 'Branch';
   metricSel.value = 'Sell-through %';
+  syncPivotDimensionOptions();
+  rowsSel.addEventListener('change', onPivotRowsChange);
+  colsSel.addEventListener('change', onPivotColsChange);
 }
 
 function pivotMetricText(metric, value) {
@@ -1996,6 +2225,7 @@ function renderPricingPivotTable() {
 }
 
 async function generatePricingPivot() {
+  if (!updatePricingGateState()) return;
   const rowDimension = document.getElementById('pivotRows')?.value;
   const colDimension = document.getElementById('pivotCols')?.value;
   const metric = document.getElementById('pivotMetric')?.value;
@@ -2094,13 +2324,33 @@ function initPricingTabEvents() {
 
     const agedDrillBtn = e.target.closest('button[data-action="toggle-aged-drilldown"]');
     if (agedDrillBtn) { toggleAgedDrillDown(agedDrillBtn); return; }
+
+    const pageBtn = e.target.closest('button[data-drill-page]');
+    if (pageBtn) {
+      const content = pageBtn.closest('[data-drill-content]');
+      const state = content && drillDownState.get(content.dataset.drillId);
+      if (state) {
+        const raw = pageBtn.dataset.drillPage;
+        state.pageSize = raw === 'all' ? 'all' : Number(raw);
+        renderDrillDownFromState(content);
+      }
+      return;
+    }
+
+    const exportBtn = e.target.closest('button[data-drill-export]');
+    if (exportBtn) {
+      const content = exportBtn.closest('[data-drill-content]');
+      if (content) exportDrillDownExcel(content);
+      return;
+    }
   });
 }
 
 function onPricingTabActivated() {
   if (pricingLoaded) return;
   pricingLoaded = true;
-  renderPricingIntelligence();
+  updatePricingGateState();
+  loadPricingOverviewKPIs([], []);
 }
 
 initPricingFilters();
