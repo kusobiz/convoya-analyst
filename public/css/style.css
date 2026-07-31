@@ -793,6 +793,24 @@ tbody tr.row-amber:hover td { background: #fcefd4; }
 }
 .btn-view-lots:hover { background: var(--navy); color: var(--white); }
 
+/* Product Type Summary's Branch-breakdown expand toggle — same accordion pattern as
+   View Lots (.accordion-row/.accordion-detail/.drilldown-inline), a compact +/- glyph
+   instead of the "View Lots" text since it expands an aggregate breakdown, not a lot list. */
+.btn-expand {
+  width: 26px;
+  height: 26px;
+  border: 1.5px solid var(--navy);
+  background: transparent;
+  color: var(--navy);
+  border-radius: 50%;
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.btn-expand:hover { background: var(--navy); color: var(--white); }
+
 tr.accordion-detail > td { padding: 0; }
 tr.accordion-detail:hover { background: none; }
 .drilldown-inline {
