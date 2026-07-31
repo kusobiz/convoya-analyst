@@ -51,6 +51,7 @@ const FILTER_COLUMNS = {
   level:        'Level No',
   lotType:      'Lot Type',
   status:       'Status',
+  priceRange:   'Price Range',
 };
 
 // Every filter accepts either a single value or an array — empty/missing means "All" (no filter).
@@ -111,6 +112,76 @@ export function queryLots(filters = {}) {
     ${where}
     GROUP BY TRIM("Material Type Desc."), TRIM("Zone"), TRIM("Level No"), TRIM("Lot Type"), UPPER(TRIM("Status"))
     ORDER BY TRIM("Zone"), TRIM("Level No")
+  `).all(...params);
+}
+
+// "Lot Create On" is stored as an integer YYYYMMDD (e.g. 20181118) — reshape to
+// YYYY-MM-DD so SQLite's julianday() can parse it. Mirrors routes/pricing.js.
+const LOT_CREATE_DATE_EXPR = `(
+  substr(CAST("Lot Create On" AS TEXT), 1, 4) || '-' ||
+  substr(CAST("Lot Create On" AS TEXT), 5, 2) || '-' ||
+  substr(CAST("Lot Create On" AS TEXT), 7, 2)
+)`;
+const AGE_DAYS_EXPR = `CAST(julianday('now') - julianday(${LOT_CREATE_DATE_EXPR}) AS INTEGER)`;
+
+// Finer-grained lot listing used by cross-tab drill-downs (e.g. Pricing Intelligence)
+// that need Suite/Section visibility and per-lot age filtering, beyond the Zone/Level
+// summary grain the main Lot Drill-Down table (queryLots) groups at. Reuses the same
+// buildWhere/FILTER_COLUMNS filtering as queryLots — only the SELECT/GROUP BY grain differs.
+export function queryLotsDetail(filters = {}) {
+  const { where, params } = buildWhere(filters);
+  const mode = classifyMaterialTypes(filters.materialType) || 'structured';
+
+  const extra = [];
+  if (filters.minAgeDays !== undefined && filters.minAgeDays !== null && filters.minAgeDays !== '') {
+    extra.push(`${AGE_DAYS_EXPR} > ${Number(filters.minAgeDays)}`);
+  }
+  const fullWhere = extra.length
+    ? (where ? `${where} AND ${extra.join(' AND ')}` : `WHERE ${extra.join(' AND ')}`)
+    : where;
+
+  // Grouped by Material No (globally unique per physical lot) rather than just the
+  // location/status dimensions, so every row here maps to exactly one physical lot and
+  // can carry that lot's own Material No — the detail grain callers need to actually
+  // locate the lot, not a rolled-up summary of many lots.
+  if (mode === 'flat') {
+    return getDb().prepare(`
+      SELECT
+        TRIM("Material No")                        AS materialNo,
+        COALESCE(TRIM("Material Type Desc."), 'Unknown') AS materialType,
+        COALESCE(TRIM("Lot Type"), 'Unknown')      AS lotType,
+        COALESCE(UPPER(TRIM("Status")), 'UNKNOWN') AS status,
+        SUM("Total Stock Case")     AS totalStock,
+        SUM("Total Sold Case")      AS totalSold,
+        SUM("Total Balance Case")   AS totalBalance,
+        SUM("Total Balance Amount") AS totalBalanceAmount,
+        COUNT(*)                    AS lotCount
+      FROM master_stock
+      ${fullWhere}
+      GROUP BY TRIM("Material No"), TRIM("Material Type Desc."), TRIM("Lot Type"), UPPER(TRIM("Status"))
+      ORDER BY TRIM("Lot Type"), TRIM("Material No")
+    `).all(...params);
+  }
+
+  return getDb().prepare(`
+    SELECT
+      TRIM("Material No")                        AS materialNo,
+      COALESCE(TRIM("Material Type Desc."), 'Unknown') AS materialType,
+      COALESCE(TRIM("Zone"), 'Unknown')          AS zone,
+      COALESCE(TRIM("Suite No"), 'Unknown')      AS suiteNo,
+      COALESCE(TRIM("Section"), 'Unknown')       AS section,
+      COALESCE(TRIM("Level No"), 'Unknown')      AS level,
+      COALESCE(TRIM("Lot Type"), 'Unknown')      AS lotType,
+      COALESCE(UPPER(TRIM("Status")), 'UNKNOWN') AS status,
+      SUM("Total Stock Case")     AS totalStock,
+      SUM("Total Sold Case")      AS totalSold,
+      SUM("Total Balance Case")   AS totalBalance,
+      SUM("Total Balance Amount") AS totalBalanceAmount,
+      COUNT(*)                    AS lotCount
+    FROM master_stock
+    ${fullWhere}
+    GROUP BY TRIM("Material No"), TRIM("Material Type Desc."), TRIM("Zone"), TRIM("Suite No"), TRIM("Section"), TRIM("Level No"), TRIM("Lot Type"), UPPER(TRIM("Status"))
+    ORDER BY TRIM("Zone"), TRIM("Suite No"), TRIM("Section"), TRIM("Level No"), TRIM("Material No")
   `).all(...params);
 }
 
@@ -180,9 +251,9 @@ const router = Router();
 
 router.post('/', (req, res) => {
   try {
-    const filters = req.body || {};
+    const { detail, ...filters } = req.body || {};
     const mode = classifyMaterialTypes(filters.materialType) || 'structured';
-    const rows = queryLots(filters);
+    const rows = detail ? queryLotsDetail(filters) : queryLots(filters);
     res.json({ rows, mode });
   } catch (err) {
     console.error('Lots query error:', err.message);

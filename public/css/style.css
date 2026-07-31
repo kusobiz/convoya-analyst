@@ -201,6 +201,9 @@ body {
 }
 .kpi-card:hover { box-shadow: 0 4px 16px rgba(26,44,91,0.14); }
 .kpi-card.accent { border-left-color: var(--gold); }
+.kpi-card--green { border-left-color: var(--green); }
+.kpi-card--amber { border-left-color: var(--amber); }
+.kpi-card--red   { border-left-color: var(--red); }
 
 .kpi-value {
   font-size: 1.75rem;
@@ -258,6 +261,10 @@ body {
 }
 .chart-wrap--hbar {
   height: 320px;
+}
+.chart-wrap--quadrant {
+  height: 420px;
+  margin-bottom: 0.75rem;
 }
 
 /* ── Tables ── */
@@ -633,6 +640,18 @@ tfoot .totals-row td {
   min-width: 72px;
 }
 
+#tablePivot th,
+#tablePivot td {
+  min-width: 90px;
+  vertical-align: middle;
+  text-align: center;
+}
+#tablePivot th:first-child,
+#tablePivot td:first-child {
+  min-width: 120px;
+  text-align: left;
+}
+
 /* Sub-header row (Qty / Amount / %) nests visually under the group headers
    with a slightly lighter navy than the main header row. */
 th.matrix-sub-th {
@@ -717,6 +736,112 @@ tfoot .matrix-total-row td.matrix-open-col {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin-top: 0.25rem;
+}
+
+/* ── Pricing Intelligence Tab ── */
+#pricingMinStock { width: 110px; }
+
+.subtab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.subtab {
+  padding: 0.4rem 0.9rem;
+  border: 1.5px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  border-radius: 20px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.subtab:hover { border-color: var(--navy); color: var(--navy); }
+.subtab.active {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: var(--white);
+}
+.subtab-panel { display: none; }
+.subtab-panel.active { display: block; }
+
+tbody tr.row-amber td { background: #fef8ec; }
+tbody tr.row-amber:hover td { background: #fcefd4; }
+
+/* ── Pricing drill-down (quadrant panel + accordion rows) ── */
+.btn-view-lots {
+  padding: 0.3rem 0.7rem;
+  border: 1.5px solid var(--navy);
+  background: transparent;
+  color: var(--navy);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.btn-view-lots:hover { background: var(--navy); color: var(--white); }
+
+tr.accordion-detail > td { padding: 0; }
+tr.accordion-detail:hover { background: none; }
+.drilldown-inline {
+  padding: 0.75rem 1rem;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.drilldown-panel {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.drilldown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1rem;
+  background: var(--navy);
+  color: var(--white);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.drilldown-close {
+  background: none;
+  border: none;
+  color: var(--white);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+.drilldown-close:hover { color: var(--gold); }
+.drilldown-panel .table-scroll { padding: 0.75rem; }
+
+.drilldown-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 0.75rem;
+  font-size: 0.82rem;
+}
+
+table.drilldown-table {
+  min-width: 0;
+  font-size: 0.8rem;
+}
+table.drilldown-table thead th {
+  background: #24386e;
+  font-size: 0.68rem;
+  padding: 0.45rem 0.7rem;
+}
+table.drilldown-table tbody td {
+  padding: 0.45rem 0.7rem;
 }
 
 /* ── AI Query Tab ── */

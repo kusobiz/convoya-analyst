@@ -45,6 +45,7 @@
     <button class="tab" data-tab="bdfocus">BD Focus</button>
     <button class="tab" data-tab="aiquery">AI Query</button>
     <button class="tab" data-tab="lots">Lot Drill-Down</button>
+    <button class="tab" data-tab="pricing">Pricing Intelligence</button>
   </div>
 
   <main class="main-content">
@@ -342,6 +343,176 @@
       </div>
     </section>
 
+    <!-- ── TAB: Pricing Intelligence ── -->
+    <section class="tab-panel" id="tab-pricing">
+
+      <!-- KPI Cards -->
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-value kpi-value--sm" id="kpi-pricingAvgPrice">—</div>
+          <div class="kpi-label">Overall Avg Price</div>
+        </div>
+        <div class="kpi-card accent">
+          <div class="kpi-value" id="kpi-pricingSellThrough">—</div>
+          <div class="kpi-label">Overall Sell-through %</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-value kpi-value--sm" id="kpi-pricingBalanceValue">—</div>
+          <div class="kpi-label">Total Balance Value</div>
+        </div>
+        <div class="kpi-card kpi-card--green">
+          <div class="kpi-value" id="kpi-pricingSweetSpot">—</div>
+          <div class="kpi-label">Sweet Spot Combos</div>
+        </div>
+        <div class="kpi-card kpi-card--amber">
+          <div class="kpi-value" id="kpi-pricingGems">—</div>
+          <div class="kpi-label">Long-Ignored Gems</div>
+        </div>
+        <div class="kpi-card kpi-card--red">
+          <div class="kpi-value" id="kpi-pricingDeadStock">—</div>
+          <div class="kpi-label">Dead Stock Flags</div>
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div class="table-card">
+        <h3 class="table-title">Filters</h3>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="pricingBranch">Branch</label>
+            <div class="ms" id="pricingBranch"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="pricingProductType">Product Type</label>
+            <div class="ms" id="pricingProductType"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="pricingMinStock">Min Stock Threshold</label>
+            <input type="number" id="pricingMinStock" class="branch-select" value="100" min="0" step="10">
+          </div>
+          <button class="btn-report" onclick="renderPricingIntelligence()">
+            <span>&#128269;</span> Search
+          </button>
+          <button class="btn-report" onclick="exportPricingQuadrantExcel()">
+            <span>&#128202;</span> Export as Excel
+          </button>
+        </div>
+        <p class="lot-filter-help">Min Stock Threshold excludes low-volume Product &times; Price Range &times; Branch
+          combinations from the quadrant chart and category tables below, to keep the analysis focused on
+          statistically meaningful samples.</p>
+      </div>
+
+      <!-- Price vs Sell-Through Quadrant -->
+      <div class="chart-card chart-card--wide">
+        <h3 class="chart-title">Price vs Sell-Through Quadrant</h3>
+        <div class="chart-wrap chart-wrap--quadrant">
+          <canvas id="chartPricingQuadrant"></canvas>
+        </div>
+        <p class="lot-filter-help">Each bubble is one Product &times; Price Range &times; Branch combination.
+          Bubble size reflects Balance Value at stake. Click a bubble to see the underlying lots.</p>
+        <div class="drilldown-panel" id="quadrantDrillDown" style="display:none;">
+          <div class="drilldown-header">
+            <span id="quadrantDrillDownTitle"></span>
+            <button type="button" class="drilldown-close" onclick="closeQuadrantDrillDown()">&times;</button>
+          </div>
+          <div class="table-scroll" id="quadrantDrillDownContent"></div>
+        </div>
+      </div>
+
+      <!-- Category Breakdown Tables -->
+      <div class="table-card">
+        <h3 class="table-title">Category Breakdown</h3>
+        <div class="subtab-bar">
+          <button class="subtab active" data-subtab="sweet_spot">Sweet Spot</button>
+          <button class="subtab" data-subtab="low_hanging_fruit">Low-Hanging Fruit</button>
+          <button class="subtab" data-subtab="long_ignored_gem">Long-Ignored Gems</button>
+          <button class="subtab" data-subtab="dead_stock">Dead Stock Alert</button>
+        </div>
+
+        <div class="subtab-panel active" id="subtab-sweet_spot">
+          <div class="table-scroll">
+            <table id="pricingTable_sweet_spot">
+              <thead><tr id="pricingHead_sweet_spot"></tr></thead>
+              <tbody><tr><td style="text-align:center;color:var(--muted)">Click Search to load pricing data.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="subtab-panel" id="subtab-low_hanging_fruit">
+          <div class="table-scroll">
+            <table id="pricingTable_low_hanging_fruit">
+              <thead><tr id="pricingHead_low_hanging_fruit"></tr></thead>
+              <tbody><tr><td style="text-align:center;color:var(--muted)">Click Search to load pricing data.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="subtab-panel" id="subtab-long_ignored_gem">
+          <div class="table-scroll">
+            <table id="pricingTable_long_ignored_gem">
+              <thead><tr id="pricingHead_long_ignored_gem"></tr></thead>
+              <tbody><tr><td style="text-align:center;color:var(--muted)">Click Search to load pricing data.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="subtab-panel" id="subtab-dead_stock">
+          <div class="table-scroll">
+            <table id="pricingTable_dead_stock">
+              <thead><tr id="pricingHead_dead_stock"></tr></thead>
+              <tbody><tr><td style="text-align:center;color:var(--muted)">Click Search to load pricing data.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Aged Inventory -->
+      <div class="table-card">
+        <h3 class="table-title">Aged Inventory Analysis (Unsold Lots)</h3>
+        <div class="table-scroll">
+          <table id="tableAgedInventory">
+            <thead><tr id="agedHeadRow"></tr></thead>
+            <tbody><tr><td style="text-align:center;color:var(--muted)">Click Search to load pricing data.</td></tr></tbody>
+          </table>
+        </div>
+        <p class="lot-filter-help">Rows highlighted amber have an average age over 2 years (730 days).
+          Click "View Lots" on a row to see the underlying OPEN lots aged over 365 days.</p>
+      </div>
+
+      <!-- Cross-Analysis Pivot Builder -->
+      <div class="table-card">
+        <h3 class="table-title">Cross-Analysis Pivot Builder</h3>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="pivotRows">Rows</label>
+            <select id="pivotRows" class="branch-select"></select>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="pivotCols">Columns</label>
+            <select id="pivotCols" class="branch-select"></select>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="pivotMetric">Metric</label>
+            <select id="pivotMetric" class="branch-select"></select>
+          </div>
+          <button class="btn-report" onclick="generatePricingPivot()">
+            <span>&#128202;</span> Generate Matrix
+          </button>
+          <button class="btn-report" onclick="exportPivotExcel()">
+            <span>&#11015;</span> Export as Excel
+          </button>
+        </div>
+        <div class="matrix-header" id="pivotHeader"></div>
+        <div class="table-scroll">
+          <table id="tablePivot">
+            <thead><tr id="pivotHeadRow"></tr></thead>
+            <tbody id="pivotBody">
+              <tr><td style="text-align:center;color:var(--muted)">Choose Rows, Columns and a Metric, then click Generate Matrix.</td></tr>
+            </tbody>
+            <tfoot id="pivotFoot"></tfoot>
+          </table>
+        </div>
+      </div>
+
+    </section>
+
   </main>
 
   <script src="/js/dashboard.js"></script>
@@ -355,6 +526,7 @@
         document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
         btn.classList.add('active');
         document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+        if (btn.dataset.tab === 'pricing' && typeof onPricingTabActivated === 'function') onPricingTabActivated();
       });
     });
 
