@@ -19,6 +19,7 @@ import queryRouter from './routes/query.js';
 import reportRouter from './routes/report.js';
 import lotsRouter from './routes/lots.js';
 import pricingRouter from './routes/pricing.js';
+import velocityRouter from './routes/velocity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -80,6 +81,7 @@ app.use('/api/query', queryRouter);
 app.use('/api/report', reportRouter);
 app.use('/api/lots', lotsRouter);
 app.use('/api/pricing', pricingRouter);
+app.use('/api/velocity', velocityRouter);
 
 app.listen(PORT, () => {
   console.log(`analyst running on http://localhost:${PORT}`);
