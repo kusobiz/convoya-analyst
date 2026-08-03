@@ -235,10 +235,13 @@ export function getLevels(filters = {}) {
   return distinctColumn('Level No', where, params);
 }
 
-// Lot types (flat land branch) are scoped by branch + material type + zone.
+// Lot types (flat land branch) are scoped by branch + material type + zone. priceRange is
+// optional on top of that — used by the Pricing Intelligence drill-downs' Lot Type filter,
+// which scopes to one row's exact Product Type + Price Range + Branch combination so it
+// never offers a Lot Type that would return zero results for that row.
 export function getLotTypes(filters = {}) {
-  const { branch, zone, materialType } = filters;
-  const { where, params } = buildWhere({ branch, zone, materialType });
+  const { branch, zone, materialType, priceRange } = filters;
+  const { where, params } = buildWhere({ branch, zone, materialType, priceRange });
   return distinctColumn('Lot Type', where, params);
 }
 
@@ -326,8 +329,8 @@ router.get('/levels', (req, res) => {
 
 router.get('/lotTypes', (req, res) => {
   try {
-    const { branch, zone, materialType } = req.query;
-    const lotTypes = getLotTypes({ branch, zone, materialType });
+    const { branch, zone, materialType, priceRange } = req.query;
+    const lotTypes = getLotTypes({ branch, zone, materialType, priceRange });
     const statuses = getStatuses({ branch, zone, materialType });
     res.json({ lotTypes, statuses });
   } catch (err) {

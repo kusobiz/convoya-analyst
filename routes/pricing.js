@@ -81,9 +81,14 @@ function categorize(row, stats) {
   // "regardless of price" — dead stock is checked first so a product whose 75th
   // percentile sell-through is itself very low doesn't also read as a sweet spot.
   if (sellThrough < 10) return 'dead_stock';
-  if (sellThrough >= p75Sell && avgPrice <= medianPrice) return 'sweet_spot';
-  if (sellThrough >= 70 && avgPrice <= p25Price && balanceCase > 0) return 'low_hanging_fruit';
   if (sellThrough <= p40Sell && avgPrice >= p75Price && balanceValue > 1_000_000) return 'long_ignored_gem';
+  // Low-Hanging Fruit's criteria (sellThrough >= 70% AND price <= 25th percentile) is a
+  // stricter subset of Sweet Spot's (sellThrough >= 75th percentile AND price <= median) —
+  // every combo qualifying for Low-Hanging Fruit also satisfies Sweet Spot's looser test,
+  // so it must be checked first or Sweet Spot claims every one of them and this bucket
+  // stays permanently empty.
+  if (sellThrough >= 70 && avgPrice <= p25Price && balanceCase > 0) return 'low_hanging_fruit';
+  if (sellThrough >= p75Sell && avgPrice <= medianPrice) return 'sweet_spot';
   return 'normal';
 }
 
@@ -163,11 +168,14 @@ export function getProductBranchBreakdown(filters = {}) {
   `).all(...params);
 }
 
-// Per-Zone breakdown of unsold (OPEN) stock, scoped to one row's own combo (Branch, Product
-// Type, Price Range for the 4 category tables; Product Type, Price Range, Branch(es) +
+// Per-Branch-and-Zone breakdown of unsold (OPEN) stock, scoped to one row's own combo (Branch,
+// Product Type, Price Range for the 4 category tables; Product Type, Price Range, Branch(es) +
 // minAgeDays for Aged Inventory) — feeds the "Zone Breakdown" expand button next to View
 // Lots. Same OPEN-only units/value + all-statuses sell-through convention as
-// getProductBranchBreakdown.
+// getProductBranchBreakdown. Grouping by Branch as well as Zone is a no-op for the 4 category
+// tables (their own filters already pin one Branch, so it's a constant column there) but fans
+// Aged Inventory's rows (which can span several branches) out into one row per Branch+Zone —
+// what lets each zone row's own View Lots drill down to an exact single Branch.
 export function getZoneBreakdown(filters = {}) {
   const { branch, productType, priceRange, minAgeDays } = filters;
   const extra = [REAL_PRICE_RANGE];
@@ -178,6 +186,7 @@ export function getZoneBreakdown(filters = {}) {
 
   return getDb().prepare(`
     SELECT
+      COALESCE(TRIM("Branch"), 'Unknown') AS branch,
       COALESCE(TRIM("Zone"), 'Unknown') AS zone,
       SUM(CASE WHEN UPPER(TRIM("Status")) = 'OPEN' THEN "Total Stock Case" ELSE 0 END)     AS unsoldUnits,
       SUM(CASE WHEN UPPER(TRIM("Status")) = 'OPEN' THEN "Total Balance Amount" ELSE 0 END) AS unsoldBalanceValue,
@@ -186,9 +195,9 @@ export function getZoneBreakdown(filters = {}) {
         ELSE 0 END AS sellThrough
     FROM master_stock
     ${where}
-    GROUP BY TRIM("Zone")
+    GROUP BY TRIM("Branch"), TRIM("Zone")
     HAVING unsoldUnits > 0
-    ORDER BY TRIM("Zone")
+    ORDER BY TRIM("Branch"), TRIM("Zone")
   `).all(...params);
 }
 

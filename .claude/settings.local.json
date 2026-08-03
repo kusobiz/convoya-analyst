@@ -17,7 +17,18 @@
       "Bash(pm2 logs *)",
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(git config *)",
+      "Bash(git rm *)",
+      "Bash(sqlite3 data/stock.db \".schema master_stock\")",
+      "Bash(pm2 list *)",
+      "Bash(PORT=3999 node server.js)",
+      "Bash(kill %1)",
+      "Bash(jobs)",
+      "Read(//root/.pm2/logs/**)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3001/login)",
+      "Bash(sqlite3 /root/analyst/data/stock.db \".schema master_stock\")",
+      "Bash(xargs ls -la)"
     ]
   }
 }
