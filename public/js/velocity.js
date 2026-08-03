@@ -799,6 +799,15 @@ document.getElementById('velocityHeadRow')?.addEventListener('click', (e) => {
   renderVelocityTable();
 });
 
+// Split By Product Type returns the raw "NV "-prefixed Material Type Desc. value — the query
+// itself must use the full value, but nothing downstream should render it. Stripping it once
+// here means the chart legend/tooltip, table headers, and Excel/PDF export (all of which just
+// treat splitValue as an opaque label) automatically show "Niche" instead of "NV Niche".
+function veloStripProductTypeSplitLabels(result, splitBy) {
+  if (splitBy !== 'productType') return result;
+  return { series: result.series.map(s => ({ ...s, splitValue: stripNVPrefix(s.splitValue) })) };
+}
+
 async function generateVelocityTrend() {
   veloHasSearched = true;
   const filters = getVeloFilterValues();
@@ -807,7 +816,7 @@ async function generateVelocityTrend() {
   console.log('[velocity] /api/velocity/sales request body:', body);
   showVelocityLoading();
   try {
-    const result = await fetchVeloJSON('sales', body);
+    const result = veloStripProductTypeSplitLabels(await fetchVeloJSON('sales', body), splitBy);
     veloState.rawResult = result;
     veloState.lastResult = veloApplyPeriodFilter(result);
     const hasData = result.series.some(s => s.points.length > 0);
