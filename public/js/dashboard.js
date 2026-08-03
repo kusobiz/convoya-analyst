@@ -1164,6 +1164,14 @@ class MultiSelect {
     this.onChange(this.getValues());
   }
 
+  // Same effect as clearAll() but skips the onChange callback — for callers that clear
+  // several MultiSelects as one batch (e.g. a "reset these fields" quick action) and want
+  // a single follow-up refresh instead of one per field.
+  clearAllSilent() {
+    this.selected = new Set();
+    this._render();
+  }
+
   getValues() { return [...this.selected]; }
 }
 

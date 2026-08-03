@@ -46,6 +46,7 @@
     <button class="tab" data-tab="aiquery">AI Query</button>
     <button class="tab" data-tab="lots">Lot Drill-Down</button>
     <button class="tab" data-tab="pricing">Pricing Intelligence</button>
+    <button class="tab" data-tab="velocity">Sales Velocity</button>
   </div>
 
   <main class="main-content">
@@ -536,10 +537,177 @@
 
     </section>
 
+    <!-- ── TAB: Sales Velocity ── -->
+    <section class="tab-panel" id="tab-velocity">
+      <div class="table-card">
+        <h3 class="table-title">Filters</h3>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field velo-simple-only">
+            <label class="lot-filter-label" for="veloBranch">Branch</label>
+            <div class="ms" id="veloBranch"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="veloProductType">Product Type</label>
+            <div class="ms" id="veloProductType"></div>
+          </div>
+          <div class="lot-filter-field velo-simple-only" id="veloFieldZone">
+            <label class="lot-filter-label" for="veloZone">Zone</label>
+            <div class="ms" id="veloZone"></div>
+          </div>
+          <div class="lot-filter-field velo-structured-only velo-simple-only" id="veloFieldSuite">
+            <label class="lot-filter-label" for="veloSuite">Suite No</label>
+            <div class="ms" id="veloSuite"></div>
+          </div>
+          <div class="lot-filter-field velo-structured-only velo-simple-only" id="veloFieldSection">
+            <label class="lot-filter-label" for="veloSection">Section</label>
+            <div class="ms" id="veloSection"></div>
+          </div>
+          <div class="lot-filter-field velo-structured-only velo-simple-only" id="veloFieldLevel">
+            <label class="lot-filter-label" for="veloLevel">Level</label>
+            <div class="ms" id="veloLevel"></div>
+          </div>
+          <div class="lot-filter-field velo-simple-only velo-eyelevel-only" id="veloFieldEyeLevel">
+            <label class="lot-filter-label" for="veloEyeLevel">Eye Level</label>
+            <div class="ms" id="veloEyeLevel"></div>
+          </div>
+          <div class="lot-filter-field velo-simple-only">
+            <label class="lot-filter-label" for="veloLotType">Lot Type</label>
+            <div class="ms" id="veloLotType"></div>
+          </div>
+          <div class="lot-filter-field velo-simple-only">
+            <label class="lot-filter-label" for="veloSplitBy">Split By</label>
+            <select id="veloSplitBy" class="branch-select"></select>
+          </div>
+          <button class="btn-report velo-simple-only" id="btnVelocitySearch" onclick="generateVelocityTrend()">
+            <span>&#128269;</span> Generate Trend
+          </button>
+          <button class="btn-report velo-simple-only" onclick="compareBranches()">
+            <span>&#128202;</span> Compare Branches
+          </button>
+          <button class="btn-report" onclick="exportVelocityExcel()">
+            <span>&#11015;</span> Export to Excel
+          </button>
+          <button class="btn-report" onclick="exportVelocityPDF()">
+            <span>&#128196;</span> Export as PDF
+          </button>
+        </div>
+        <div class="subtab-bar velo-metric-toggle" id="veloMetricToggle">
+          <button type="button" class="subtab active" data-metric="units">Units Sold</button>
+          <button type="button" class="subtab" data-metric="value">Sales Value (MYR)</button>
+        </div>
+        <p class="lot-filter-help">Only lots with a genuine sale (Total Sold Case &gt; 0) are counted — unsold OPEN
+          lots carry a placeholder Sales Date and are excluded from this trend.</p>
+      </div>
+
+      <div class="chart-card chart-card--wide">
+        <h3 class="chart-title" id="velocityChartTitle">Sales Trend</h3>
+        <div class="subtab-bar" id="veloCompareModeToggle">
+          <button type="button" class="subtab active" data-compare-mode="simple">Simple Split</button>
+          <button type="button" class="subtab" data-compare-mode="custom">Custom Comparison</button>
+        </div>
+        <div class="velo-custom-panel velo-custom-only" id="veloCustomPanel">
+          <div class="velo-custom-actions">
+            <button type="button" class="btn-report" id="btnAddSeries">
+              <span>&#10133;</span> Add Series
+            </button>
+            <button type="button" class="btn-report" id="btnGenerateComparison">
+              <span>&#128269;</span> Generate Comparison
+            </button>
+            <span class="velo-custom-hint">Up to 6 series &middot; each uses its own Branch/Zone/Suite/Section/Level/Eye Level/Lot Type, sharing the Product Type, metric, and time period above.</span>
+          </div>
+          <div class="velo-custom-series-list" id="veloCustomSeriesList"></div>
+        </div>
+        <div class="velo-period-bar">
+          <div class="velo-period-presets" id="veloPeriodPresets">
+            <button type="button" class="subtab" data-period="12m">Last 12 Months</button>
+            <button type="button" class="subtab active" data-period="24m">Last 24 Months</button>
+            <button type="button" class="subtab" data-period="3y">Last 3 Years</button>
+            <button type="button" class="subtab" data-period="all">All Time</button>
+          </div>
+          <div class="velo-period-custom">
+            <span class="velo-period-label">Custom:</span>
+            <select id="veloPeriodFrom" class="branch-select"></select>
+            <span class="velo-period-label">to</span>
+            <select id="veloPeriodTo" class="branch-select"></select>
+          </div>
+        </div>
+        <div class="subtab-bar" id="veloChartTypeToggle">
+          <button type="button" class="subtab active" data-chart-type="line">Line</button>
+          <button type="button" class="subtab" data-chart-type="stacked-area">Stacked Area</button>
+          <button type="button" class="subtab" data-chart-type="grouped-bar">Grouped Bar</button>
+        </div>
+        <p class="velo-filter-summary velo-simple-only" id="veloFilterSummary"></p>
+        <div class="chart-wrap chart-wrap--velocity" id="velocityChartWrap">
+          <canvas id="chartVelocity"></canvas>
+        </div>
+        <div class="chart-empty-state" id="velocityChartEmpty">Select filters and click Generate Trend.</div>
+      </div>
+
+      <div class="table-card">
+        <h3 class="table-title">Monthly Trend</h3>
+        <div class="subtab-bar" id="veloTableViewToggle">
+          <button type="button" class="subtab active" data-view="values">Values</button>
+          <button type="button" class="subtab" data-view="pct">MoM / YoY %</button>
+        </div>
+        <div class="table-scroll">
+          <table id="tableVelocity">
+            <thead><tr id="velocityHeadRow"></tr></thead>
+            <tbody id="velocityBody">
+              <tr><td style="text-align:center;color:var(--muted)">Select filters and click Generate Trend.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="velo-modal-overlay" id="veloSeriesModal" hidden>
+        <div class="velo-modal-box">
+          <h3 class="table-title">Add Comparison Series</h3>
+          <p class="lot-filter-help" style="margin-top:0;padding-top:0;border-top:none;">
+            These filters apply to this series only — Product Type, metric, and time period are shared across all series.
+          </p>
+          <div class="lot-filter-row">
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="csBranch">Branch</label>
+              <div class="ms" id="csBranch"></div>
+            </div>
+            <div class="lot-filter-field" id="csFieldZone">
+              <label class="lot-filter-label" for="csZone">Zone</label>
+              <div class="ms" id="csZone"></div>
+            </div>
+            <div class="lot-filter-field velo-structured-only" id="csFieldSuite">
+              <label class="lot-filter-label" for="csSuite">Suite No</label>
+              <div class="ms" id="csSuite"></div>
+            </div>
+            <div class="lot-filter-field velo-structured-only" id="csFieldSection">
+              <label class="lot-filter-label" for="csSection">Section</label>
+              <div class="ms" id="csSection"></div>
+            </div>
+            <div class="lot-filter-field velo-structured-only" id="csFieldLevel">
+              <label class="lot-filter-label" for="csLevel">Level</label>
+              <div class="ms" id="csLevel"></div>
+            </div>
+            <div class="lot-filter-field velo-eyelevel-only" id="csFieldEyeLevel">
+              <label class="lot-filter-label" for="csEyeLevel">Eye Level</label>
+              <div class="ms" id="csEyeLevel"></div>
+            </div>
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="csLotType">Lot Type</label>
+              <div class="ms" id="csLotType"></div>
+            </div>
+          </div>
+          <div class="velo-modal-actions">
+            <button type="button" class="btn-report" id="btnCancelSeries">Cancel</button>
+            <button type="button" class="btn-report" id="btnConfirmSeries">Add Series</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <script src="/js/dashboard.js"></script>
   <script src="/js/query.js"></script>
+  <script src="/js/velocity.js"></script>
 
   <script>
     // Tab switching
@@ -550,6 +718,7 @@
         btn.classList.add('active');
         document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
         if (btn.dataset.tab === 'pricing' && typeof onPricingTabActivated === 'function') onPricingTabActivated();
+        if (btn.dataset.tab === 'velocity' && typeof onVelocityTabActivated === 'function') onVelocityTabActivated();
       });
     });
 
