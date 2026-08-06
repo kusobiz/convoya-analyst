@@ -33,6 +33,7 @@ const FILTER_COLUMNS = {
   branch:      'Branch',
   productType: 'Material Type Desc.',
   level:       'Level No',
+  zone:        'Zone',
 };
 
 // Every filter accepts either a single value or an array — empty/missing means "All" (no
@@ -178,7 +179,7 @@ function fetchLifecycleRows(filters) {
     SELECT
       TRIM("Branch")              AS branch,
       TRIM("Material Type Desc.") AS productType,
-      TRIM("Level No")            AS level,
+      TRIM("Zone")                AS zone,
       "Lot Create On"             AS lotCreateOn,
       "Sales Date"                AS salesDate,
       "Total Stock Case"          AS totalStock,
@@ -219,8 +220,12 @@ function nowMonthIndex() {
   return now.getFullYear() * 12 + (now.getMonth() + 1);
 }
 
-// Groups raw rows into cohorts (Branch+ProductType+Level+CohortPeriod). Per spec:
-// totalUnits/soldUnits/balanceUnits/balanceValue/avgPrice are summed/averaged across every
+// Groups raw rows into cohorts (Branch+ProductType+Zone+CohortPeriod). Zone is the primary
+// cohort unit — a single zone launch is one cohort regardless of how many levels it spans
+// (Level is a drill-down detail within a zone-cohort, see getLifecycleLevelBreakdown, not a
+// top-level grouping key). Zone exists for flat-land product types too (unlike Level, which is
+// blank there), so this grouping works uniformly across structured and flat-land types. Per
+// spec: totalUnits/soldUnits/balanceUnits/balanceValue/avgPrice are summed/averaged across every
 // row in the cohort regardless of status; soldByMonth (the cumulative-sell-through curve's
 // raw material) only counts rows with a real sale (Total Sold Case > 0 — unsold OPEN lots
 // carry a placeholder Sales Date equal to Lot Create On and are always excluded here),
@@ -232,10 +237,10 @@ function buildCohortsFromRows(rows) {
     const created = parseYYYYMMDD(r.lotCreateOn);
     if (!created) continue;
     const cohortPeriod = cohortPeriodOf(created);
-    const key = `${r.branch}|${r.productType}|${r.level}|${cohortPeriod}`;
+    const key = `${r.branch}|${r.productType}|${r.zone}|${cohortPeriod}`;
     if (!cohorts.has(key)) {
       cohorts.set(key, {
-        branch: r.branch, productType: r.productType, level: r.level, cohortPeriod,
+        branch: r.branch, productType: r.productType, zone: r.zone, cohortPeriod,
         totalUnits: 0, soldUnits: 0, balanceUnits: 0, balanceValue: 0,
         priceSum: 0, priceCount: 0,
         soldByMonth: new Map(),
@@ -270,7 +275,7 @@ function buildCohortsFromRows(rows) {
       ageMonthsNow,
       avgPrice: c.priceCount > 0 ? c.priceSum / c.priceCount : 0,
       overallSellThroughPct: c.totalUnits > 0 ? (c.soldUnits / c.totalUnits) * 100 : 0,
-      cohortLabel: `${c.branch} - ${stripNVPrefix(c.productType)} - Level ${c.level} - ${c.cohortPeriod}`,
+      cohortLabel: `${c.branch} - ${stripNVPrefix(c.productType)} - Zone ${c.zone} - ${c.cohortPeriod}`,
     });
   }
   return list;
@@ -307,7 +312,7 @@ export function getLifecycleCurve(filters = {}) {
       });
     }
     return {
-      cohortLabel: c.cohortLabel, branch: c.branch, productType: c.productType, level: c.level,
+      cohortLabel: c.cohortLabel, branch: c.branch, productType: c.productType, zone: c.zone,
       cohortPeriod: c.cohortPeriod, totalUnits: c.totalUnits, ageMonthsNow: c.ageMonthsNow, points,
     };
   });
@@ -337,14 +342,22 @@ function cohortStatusFlag(cohort, ageMonths) {
   return 'Steady';
 }
 
+const STATUS_FLAGS = ['New', 'Steady', 'Slowing', 'Stagnant', 'Sold Out'];
+
+// The Cohort Table has its own decoupled Branch/Product Type filters (cohortFiltersUI in the
+// frontend) — separate from the tab-wide Branch/Product Type/Level filters that drive Overview/
+// Curve/New Zones/Agent Focus, same "own independent filters" pattern routes/pricing.js's Pivot
+// Builder already uses (pivotFiltersUI). Level is deliberately not one of them: Level is now a
+// per-row drill-down detail (getLifecycleLevelBreakdown), not a Cohort Table filter dimension.
 export function getLifecycleCohortTable(filters = {}) {
   const ageMonths = resolveAgeMonths(filters.ageMonths);
-  const cohorts = buildCohortsFromRows(fetchLifecycleRows(filters));
+  const { branch, productType, bigLotFilter } = filters;
+  const cohorts = buildCohortsFromRows(fetchLifecycleRows({ branch, productType, bigLotFilter }));
 
-  const rows = cohorts.map(c => ({
+  const allRows = cohorts.map(c => ({
     branch: c.branch,
     productType: c.productType,
-    level: c.level,
+    zone: c.zone,
     cohortPeriod: c.cohortPeriod,
     cohortLabel: c.cohortLabel,
     ageMonthsNow: c.ageMonthsNow,
@@ -357,8 +370,125 @@ export function getLifecycleCohortTable(filters = {}) {
     statusFlag: cohortStatusFlag(c, ageMonths),
   }));
 
+  // Computed BEFORE the statusFlag filter below (over the Branch/Product Type scope only), so
+  // the Status Flag summary cards always show all 5 flags' real counts/values regardless of
+  // which flag (if any) is currently selected — clicking a card narrows `rows`, never the cards.
+  const statusFlagSummary = STATUS_FLAGS.map(flag => {
+    const matching = allRows.filter(r => r.statusFlag === flag);
+    return {
+      flag,
+      count: matching.length,
+      balanceValue: matching.reduce((sum, r) => sum + r.balanceValue, 0),
+    };
+  });
+
+  const statusFlagList = toArray(filters.statusFlag).map(v => String(v).trim()).filter(Boolean);
+  const rows = statusFlagList.length ? allRows.filter(r => statusFlagList.includes(r.statusFlag)) : allRows;
+
   rows.sort((a, b) => b.balanceValue - a.balanceValue);
-  return { rows, ageMonths };
+  return { rows, ageMonths, statusFlagSummary };
+}
+
+// Parses "YYYY-Qn" (CohortPeriod) into a [start, end) date range on Lot Create On. Mirrors
+// routes/lots.js's identically-named helper — kept as a local copy (same convention as
+// LOT_CREATE_DATE_EXPR/VALID_LOT_CREATE above) rather than a cross-file import.
+function cohortPeriodDateRange(cohortPeriod) {
+  const m = /^(\d{4})-Q([1-4])$/.exec(String(cohortPeriod || ''));
+  if (!m) return null;
+  const year = Number(m[1]);
+  const startMonth = (Number(m[2]) - 1) * 3 + 1;
+  const start = `${year}-${String(startMonth).padStart(2, '0')}-01`;
+  const endYear = startMonth + 3 > 12 ? year + 1 : year;
+  const endMonth = ((startMonth + 3 - 1) % 12) + 1;
+  const end = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
+  return { start, end };
+}
+
+// Level Breakdown — the "+" expand on a Cohort Table row (structured product types only; flat
+// land has no Level). Scoped to one row's own exact Branch+ProductType+Zone+CohortPeriod, same
+// grain the row's own View Lots drills into, just aggregated by Level instead of listing lots.
+export function getLifecycleLevelBreakdown(filters = {}) {
+  const { branch, productType, zone, cohortPeriod } = filters;
+  const extra = [VALID_LOT_CREATE];
+  const cohortRange = cohortPeriod ? cohortPeriodDateRange(cohortPeriod) : null;
+  if (cohortRange) {
+    extra.push(`${LOT_CREATE_DATE_EXPR} >= '${cohortRange.start}' AND ${LOT_CREATE_DATE_EXPR} < '${cohortRange.end}'`);
+  }
+  const { where, params } = buildWhere({ branch, productType, zone }, extra);
+
+  const rows = getDb().prepare(`
+    SELECT
+      COALESCE(TRIM("Level No"), 'Unknown') AS level,
+      SUM("Total Stock Case")     AS totalUnits,
+      SUM("Total Sold Case")      AS soldUnits,
+      SUM("Total Balance Case")   AS balanceUnits,
+      SUM("Total Balance Amount") AS balanceValue
+    FROM master_stock
+    ${where}
+    GROUP BY TRIM("Level No")
+  `).all(...params);
+
+  const result = rows.map(r => ({
+    level: r.level,
+    totalUnits: r.totalUnits || 0,
+    balanceUnits: r.balanceUnits || 0,
+    balanceValue: r.balanceValue || 0,
+    sellThroughPct: r.totalUnits > 0 ? ((r.soldUnits || 0) / r.totalUnits) * 100 : 0,
+  })).sort((a, b) => b.balanceValue - a.balanceValue);
+
+  return { rows: result };
+}
+
+// Newly Launched Zones — one row per Branch+ProductType+Zone whose EARLIEST Lot Create On
+// (across every lot ever recorded in that zone) falls within the last ageMonths, i.e. the zone
+// itself is a recent launch, not just a few individual lots trickling in. Since ageMonths is
+// tested against the MIN Lot Create On of the group, every other lot in a qualifying zone is
+// necessarily >= that same threshold too — so the zone's full totals (not just its "new" slice)
+// are exactly its lifetime-to-date figures.
+export function getLifecycleNewZones(filters = {}) {
+  const ageMonths = resolveAgeMonths(filters.ageMonths);
+  const { branch, productType, bigLotFilter } = filters;
+  const { where, params } = buildWhere({ branch, productType, bigLotFilter }, [
+    VALID_LOT_CREATE,
+    `"Zone" IS NOT NULL AND TRIM("Zone") != ''`,
+  ]);
+
+  const rows = getDb().prepare(`
+    SELECT
+      TRIM("Branch")              AS branch,
+      TRIM("Material Type Desc.") AS productType,
+      TRIM("Zone")                AS zone,
+      MIN("Lot Create On")        AS earliestLotCreateOn,
+      SUM("Total Stock Case")     AS totalUnits,
+      SUM("Total Sold Case")      AS soldUnits,
+      SUM("Total Balance Case")   AS balanceUnits,
+      SUM("Total Balance Amount") AS balanceValue
+    FROM master_stock
+    ${where}
+    GROUP BY TRIM("Branch"), TRIM("Material Type Desc."), TRIM("Zone")
+  `).all(...params);
+
+  const nowMI = nowMonthIndex();
+  const result = [];
+  for (const r of rows) {
+    const created = parseYYYYMMDD(r.earliestLotCreateOn);
+    if (!created) continue;
+    const zoneAgeMonths = Math.max(0, nowMI - monthIndexOf(created));
+    if (zoneAgeMonths > ageMonths) continue;
+    result.push({
+      branch: r.branch,
+      productType: r.productType,
+      zone: r.zone,
+      totalUnitsLaunched: r.totalUnits || 0,
+      ageMonths: zoneAgeMonths,
+      balanceUnits: r.balanceUnits || 0,
+      balanceValue: r.balanceValue || 0,
+      sellThroughPct: r.totalUnits > 0 ? ((r.soldUnits || 0) / r.totalUnits) * 100 : 0,
+    });
+  }
+
+  result.sort((a, b) => b.totalUnitsLaunched - a.totalUnitsLaunched);
+  return { rows: result, ageMonths };
 }
 
 // Snapshot (current-state only, not a historical time series — see frontend copy) comparison
@@ -443,6 +573,24 @@ router.post('/cohort-table', (req, res) => {
     res.json(getLifecycleCohortTable(req.body || {}));
   } catch (err) {
     console.error('Lifecycle cohort-table error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/level-breakdown', (req, res) => {
+  try {
+    res.json(getLifecycleLevelBreakdown(req.body || {}));
+  } catch (err) {
+    console.error('Lifecycle level-breakdown error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/new-zones', (req, res) => {
+  try {
+    res.json(getLifecycleNewZones(req.body || {}));
+  } catch (err) {
+    console.error('Lifecycle new-zones error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

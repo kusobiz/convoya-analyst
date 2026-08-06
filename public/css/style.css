@@ -270,6 +270,96 @@ body {
   font-weight: 600;
 }
 
+/* ── Cohort Table Status Flag summary cards + legend (Product Lifecycle tab) ── */
+.status-flag-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.6rem;
+  margin: 0.75rem 0;
+}
+.status-flag-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--navy);
+  border-radius: 10px;
+  padding: 0.75rem 0.85rem;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.status-flag-card:hover { box-shadow: 0 4px 16px rgba(26,44,91,0.14); }
+.status-flag-card--active { box-shadow: 0 0 0 2px var(--navy) inset; }
+.status-flag-card--blue   { border-left-color: var(--blue); }
+.status-flag-card--green  { border-left-color: var(--green); }
+.status-flag-card--amber  { border-left-color: var(--amber); }
+.status-flag-card--red    { border-left-color: var(--red); }
+.status-flag-card--grey   { border-left-color: var(--muted); }
+.status-flag-card-count {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--navy);
+  line-height: 1;
+}
+.status-flag-card-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.status-flag-card-value {
+  font-size: 0.82rem;
+  color: var(--navy);
+  font-weight: 600;
+}
+.status-flag-clear-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 0.75rem 0.85rem;
+  cursor: pointer;
+  font: inherit;
+  color: var(--navy);
+  font-weight: 600;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.status-flag-clear-btn:hover { box-shadow: 0 4px 16px rgba(26,44,91,0.14); }
+.status-flag-clear-btn--active { border-color: var(--navy); border-style: solid; }
+.status-flag-clear-sub {
+  font-size: 0.68rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.status-flag-legend {
+  margin: 0.5rem 0 1rem;
+  font-size: 0.82rem;
+}
+.status-flag-legend summary {
+  cursor: pointer;
+  color: var(--navy);
+  font-weight: 600;
+}
+.status-flag-legend-body {
+  margin-top: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  background: var(--bg);
+  border-radius: 8px;
+  color: var(--text);
+}
+.status-flag-legend-body p { margin: 0 0 0.4rem; }
+.status-flag-legend-body p:last-child { margin-bottom: 0; }
+.status-flag-legend-note { color: var(--muted); font-style: italic; }
+
 /* ── Charts Grid ── */
 .charts-grid {
   display: grid;

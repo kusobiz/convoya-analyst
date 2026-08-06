@@ -1346,6 +1346,15 @@ class MultiSelect {
     this._render();
   }
 
+  // Programmatically sets the selection to an exact list of values (e.g. a status-flag summary
+  // card jumping the filter straight to one value) without going through the checkbox change
+  // handler — skips onChange same as clearAllSilent(), so callers that immediately trigger
+  // their own refresh right after don't get it fired twice.
+  setSelectedValues(values) {
+    this.selected = new Set(values.filter(v => this.options.includes(v)));
+    this._render();
+  }
+
   getValues() { return [...this.selected]; }
 }
 
