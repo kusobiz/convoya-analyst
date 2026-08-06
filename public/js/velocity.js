@@ -63,7 +63,7 @@ async function fetchVeloJSON(path, body) {
   const res = await fetch(`/api/velocity/${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
+    body: JSON.stringify({ ...(body || {}), bigLotFilter: window.bigLotFilter }),
   });
   if (res.status === 401 || res.redirected || res.url.includes('/login')) {
     throw new Error('SESSION_EXPIRED');
@@ -138,12 +138,16 @@ function veloUpdateFieldVisibility() {
     });
 }
 
-async function refreshVelocityCascade() {
+// selectAllTopLevel is only ever passed true from initVelocityFilters()'s one-time initial
+// call — every subsequent cascade refresh (any filter's onChange) must leave it false, or a
+// narrowed Branch/Product Type selection would get silently reset back to "every value" the
+// next time any other filter changes.
+async function refreshVelocityCascade({ selectAllTopLevel = false } = {}) {
   const filters = getVeloFilterValues();
   try {
     const result = await fetchVeloJSON('filters', filters);
-    veloFiltersUI.branch.setOptions(result.branches || []);
-    veloFiltersUI.productType.setOptions(result.productTypes || []);
+    veloFiltersUI.branch.setOptions(result.branches || [], selectAllTopLevel ? { selectAll: true } : undefined);
+    veloFiltersUI.productType.setOptions(result.productTypes || [], selectAllTopLevel ? { selectAll: true } : undefined);
     veloFiltersUI.zone.setOptions(result.zones || []);
     veloFiltersUI.suiteNo.setOptions(result.suiteNos || []);
     veloFiltersUI.section.setOptions(result.sections || []);
@@ -216,8 +220,21 @@ function initVelocityFilters() {
     });
   }
 
-  veloFiltersReady = refreshVelocityCascade();
+  veloFiltersReady = refreshVelocityCascade({ selectAllTopLevel: true });
 }
+
+// Branch/Product Type default to "All" selected (see initVelocityFilters), consistent with
+// Pricing Intelligence's own default-to-All — so the very first tab open can render a full
+// aggregate trend immediately instead of the empty "Select filters and click Generate Trend"
+// state. Guarded so a later revisit doesn't stomp on filters the user has since changed.
+let veloLoaded = false;
+async function onVelocityTabActivated() {
+  if (veloLoaded) return;
+  veloLoaded = true;
+  await veloFiltersReady;
+  generateVelocityTrend();
+}
+window.onVelocityTabActivated = onVelocityTabActivated;
 
 // Quick action: sets up the standard "which branches are moving this product" view — Split
 // By Branch with every branch visible (no Branch pick narrowing the set), leaving every other
@@ -941,3 +958,13 @@ window.generateVelocityTrend = generateVelocityTrend;
 window.exportVelocityExcel = exportVelocityExcel;
 window.exportVelocityPDF = exportVelocityPDF;
 window.compareBranches = compareBranches;
+
+// Called by dashboard.js's global header control on every Lot Size change — re-runs
+// whichever mode (Simple Split vs Custom Comparison) the user last searched with, mirroring
+// the existing veloHasSearched auto-rerun behavior for in-tab filter/Split By changes.
+function refreshVelocityForBigLotFilter() {
+  if (!veloHasSearched) return;
+  if (veloCompareMode === 'custom') generateVelocityComparison();
+  else generateVelocityTrend();
+}
+window.refreshVelocityForBigLotFilter = refreshVelocityForBigLotFilter;
