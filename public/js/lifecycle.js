@@ -9,11 +9,26 @@ let lifecycleLoaded = false;
 let lastLifecycleCohortRows = [];
 let lifecycleCohortSortState = { key: 'balanceValue', dir: 'desc' };
 
-// Cohort rows are denser/more important per row than a raw lot listing (each one already
-// summarizes a whole Branch+Product Type+Level+launch-quarter group), so this defaults to 25
-// rather than the 10 used for lot lists (see DRILL_PAGE_SIZES in dashboard.js).
 const LIFECYCLE_COHORT_PAGE_SIZES = [10, 25, 50];
-let lifecycleCohortPageSize = 25;
+let lifecycleCohortPageSize = 10;
+
+let lastLifecycleNewZoneRows = [];
+let lifecycleNewZonesSortState = { key: 'totalUnitsLaunched', dir: 'desc' };
+let lifecycleNewZonesPageSize = 25;
+
+// The Cohort Table has its own decoupled Branch/Product Type/Status Flag filters — separate
+// from lifecycleFiltersUI (which drives Overview/Curve/New Zones/Agent Focus) — same "own
+// independent filters" pattern dashboard.js's Pivot Builder (pivotFiltersUI) already uses.
+// New / Aging Threshold (lifecycleAgeMonths) is still shared, since Status Flag's "New" bucket
+// is defined relative to that same tab-wide age window.
+const cohortFiltersUI = {};
+let lifecycleCohortFiltersReady = null;
+let lastLifecycleStatusFlagSummary = [];
+const LIFECYCLE_STATUS_FLAGS = ['New', 'Steady', 'Slowing', 'Stagnant', 'Sold Out'];
+const LIFECYCLE_STATUS_FLAG_CARD_CLASS = {
+  New: 'status-flag-card--blue', Steady: 'status-flag-card--green', Slowing: 'status-flag-card--amber',
+  Stagnant: 'status-flag-card--red', 'Sold Out': 'status-flag-card--grey',
+};
 
 async function fetchLifecycleJSON(path, body) {
   const res = await fetch(`/api/lifecycle/${path}`, {
@@ -88,6 +103,41 @@ function initLifecycleFilters() {
   }).catch(e => console.error('[lifecycle] initLifecycleFilters failed:', e));
 }
 
+// Branch changing narrows which Product Types are offered (same cascade shape as the tab-wide
+// filters above), then immediately re-renders the Cohort Table section with the new scope.
+async function refreshLifecycleCohortProductTypeCascade() {
+  const branch = cohortFiltersUI.branch.getValues();
+  try {
+    const { productTypes } = await fetchLifecycleJSON('filters', { branch });
+    cohortFiltersUI.productType.setOptions(productTypes || [], { selectAll: true });
+  } catch (e) {
+    console.error('[lifecycle] refreshLifecycleCohortProductTypeCascade failed:', e);
+  }
+}
+
+function initLifecycleCohortFilters() {
+  cohortFiltersUI.branch = new MultiSelect('cohortBranch', {
+    placeholder: 'All branches',
+    onChange: () => { refreshLifecycleCohortProductTypeCascade().then(renderLifecycleCohortSection); },
+  });
+  cohortFiltersUI.productType = new MultiSelect('cohortProductType', {
+    placeholder: 'All product types',
+    displayFn: stripNVPrefix,
+    onChange: renderLifecycleCohortSection,
+  });
+  cohortFiltersUI.statusFlag = new MultiSelect('cohortStatusFlag', {
+    placeholder: 'All status flags',
+    onChange: renderLifecycleCohortSection,
+  });
+  // Status Flag is a fixed enum, not DB-driven — set once, no fetch/cascade needed.
+  cohortFiltersUI.statusFlag.setOptions(LIFECYCLE_STATUS_FLAGS, { selectAll: true });
+
+  lifecycleCohortFiltersReady = fetchLifecycleJSON('filters', {}).then(({ branches, productTypes }) => {
+    cohortFiltersUI.branch.setOptions(branches || [], { selectAll: true });
+    cohortFiltersUI.productType.setOptions(productTypes || [], { selectAll: true });
+  }).catch(e => console.error('[lifecycle] initLifecycleCohortFilters failed:', e));
+}
+
 // ── Section 1: New vs Aging Overview ──
 async function renderLifecycleOverview(filters) {
   try {
@@ -103,6 +153,151 @@ async function renderLifecycleOverview(filters) {
     if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
     console.error('[lifecycle] renderLifecycleOverview failed:', err);
   }
+}
+
+// ── Section 1b: Newly Launched Zones ──
+const LIFECYCLE_NEW_ZONES_COLUMNS = [
+  { key: 'branch',             label: 'Branch',                  type: 'text' },
+  { key: 'productType',        label: 'Product Type',            type: 'text',   render: r => stripNVPrefix(r.productType) },
+  { key: 'zone',                label: 'Zone',                    type: 'text' },
+  { key: 'totalUnitsLaunched', label: 'Total Units Launched',    type: 'number', render: r => fmt(r.totalUnitsLaunched) },
+  { key: 'ageMonths',          label: 'Age (months)',            type: 'number', render: r => fmt(r.ageMonths) },
+  { key: 'balanceUnits',       label: 'Balance Units',           type: 'number', render: r => fmt(r.balanceUnits) },
+  { key: 'balanceValue',       label: 'Balance Value',           type: 'number', render: r => myr(r.balanceValue) },
+  { key: 'sellThroughPct',     label: 'Sell-Through % So Far',   type: 'number', render: r => pct(r.sellThroughPct) },
+];
+
+function renderLifecycleNewZonesHead() {
+  const headRow = document.getElementById('lifecycleNewZonesHeadRow');
+  if (!headRow) return;
+  headRow.innerHTML = LIFECYCLE_NEW_ZONES_COLUMNS.map(col => {
+    const isSorted = lifecycleNewZonesSortState.key === col.key;
+    const arrow = isSorted ? `<span class="sort-arrow">${lifecycleNewZonesSortState.dir === 'asc' ? '▲' : '▼'}</span>` : '';
+    return `<th class="sortable-th${isSorted ? ' sorted' : ''}" data-lifecycle-newzone-key="${col.key}">${col.label}${arrow}</th>`;
+  }).join('') + '<th></th>';
+}
+
+function renderLifecycleNewZonesToolbar(totalCount) {
+  const el = document.getElementById('lifecycleNewZonesToolbar');
+  if (!el) return;
+  if (!totalCount) { el.innerHTML = ''; return; }
+  const shown = lifecycleNewZonesPageSize === 'all' ? totalCount : Math.min(lifecycleNewZonesPageSize, totalCount);
+  el.innerHTML = `
+    <div class="drilldown-toolbar-count">Showing ${fmt(shown)} of ${fmt(totalCount)} zones</div>
+    <div class="drilldown-toolbar-actions">
+      <div class="drill-page-size">
+        ${LIFECYCLE_COHORT_PAGE_SIZES.map(n => `<button type="button" class="drill-page-btn${lifecycleNewZonesPageSize === n ? ' active' : ''}" data-lifecycle-newzone-page="${n}">${n}</button>`).join('')}
+        <button type="button" class="drill-page-btn${lifecycleNewZonesPageSize === 'all' ? ' active' : ''}" data-lifecycle-newzone-page="all">Show All</button>
+      </div>
+    </div>`;
+}
+
+// Each row is Branch+ProductType+Zone-pinned, so its own View Lots + Lot Type filter narrows
+// straight to that exact zone's OPEN lots — same reasoning as the Cohort Table's rows.
+function renderLifecycleNewZonesBody() {
+  const tbody = document.getElementById('lifecycleNewZonesBody');
+  if (!tbody) return;
+  const sorted = sortByKey(lastLifecycleNewZoneRows, lifecycleNewZonesSortState);
+  const colCount = LIFECYCLE_NEW_ZONES_COLUMNS.length + 1;
+
+  renderLifecycleNewZonesToolbar(sorted.length);
+
+  if (!sorted.length) {
+    tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--muted)">No newly launched zones match these filters.</td></tr>`;
+    return;
+  }
+
+  const rows = lifecycleNewZonesPageSize === 'all' ? sorted : sorted.slice(0, lifecycleNewZonesPageSize);
+
+  tbody.innerHTML = rows.map(r => {
+    const cells = LIFECYCLE_NEW_ZONES_COLUMNS.map(col => `<td>${col.render ? col.render(r) : (r[col.key] ?? '')}</td>`).join('');
+    const lotTypeFilter = renderLotTypeFilterHTML({ product: r.productType, branch: r.branch, priceRange: '', zone: r.zone });
+    const viewLotsBtn = `<button type="button" class="btn-view-lots" data-action="toggle-lifecycle-newzone-lots"
+      data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}"
+      data-zone="${escapeHtml(r.zone)}">View Lots</button>`;
+    return `<tr class="accordion-row">${cells}<td><div class="row-actions">${lotTypeFilter}${viewLotsBtn}</div></td></tr>
+      <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>`;
+  }).join('');
+}
+
+async function renderLifecycleNewZonesSection(filters) {
+  const tbody = document.getElementById('lifecycleNewZonesBody');
+  if (tbody) tbody.innerHTML = `<tr><td style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
+  try {
+    const { rows } = await fetchLifecycleJSON('new-zones', filters);
+    lastLifecycleNewZoneRows = rows || [];
+    renderLifecycleNewZonesHead();
+    renderLifecycleNewZonesBody();
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[lifecycle] renderLifecycleNewZonesSection failed:', err);
+    if (tbody) tbody.innerHTML = `<tr><td style="text-align:center;color:var(--red)">Error: ${err.message}</td></tr>`;
+  }
+}
+
+function onLifecycleNewZonesSortClick(key) {
+  lifecycleNewZonesSortState = lifecycleNewZonesSortState.key === key
+    ? { key, dir: lifecycleNewZonesSortState.dir === 'asc' ? 'desc' : 'asc' }
+    : { key, dir: 'asc' };
+  renderLifecycleNewZonesHead();
+  renderLifecycleNewZonesBody();
+}
+
+async function loadLifecycleNewZoneLotsContent(btn, content) {
+  content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
+  try {
+    const lotType = lotTypeFilterValues(btn.closest('tr'));
+    const filters = {
+      materialType: [btn.dataset.product],
+      branch: [btn.dataset.branch],
+      zone: [btn.dataset.zone],
+      status: ['OPEN'],
+      lotType,
+    };
+    const { rows, mode } = await fetchLotsDetail(filters);
+    const totalQty = computeDrillTotalQty(rows);
+    renderDrillDownPanel(content, {
+      rows, mode,
+      titleLine: `${escapeHtml(stripNVPrefix(btn.dataset.product))} (${fmt(totalQty)} units) · ${escapeHtml(btn.dataset.branch)} · Zone ${escapeHtml(btn.dataset.zone)} — Unsold Lots`,
+      filenameBase: `lifecycle_newzone_lots_${sanitizeForFilename(btn.dataset.product)}_${sanitizeForFilename(btn.dataset.branch)}_${sanitizeForFilename(btn.dataset.zone)}`,
+    });
+    content.dataset.loaded = 'true';
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[lifecycle] loadLifecycleNewZoneLotsContent failed:', err);
+    content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
+  }
+}
+
+async function toggleLifecycleNewZoneLots(btn) {
+  const detailRow = btn.closest('tr')?.nextElementSibling;
+  if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
+  const isOpen = detailRow.style.display !== 'none';
+  if (isOpen) { detailRow.style.display = 'none'; btn.textContent = 'View Lots'; return; }
+
+  detailRow.style.display = '';
+  btn.textContent = 'Hide Lots';
+  const content = detailRow.querySelector('[data-drill-content]');
+  if (content.dataset.loaded === 'true') return;
+  await loadLifecycleNewZoneLotsContent(btn, content);
+}
+
+function exportLifecycleNewZonesExcel() {
+  if (!lastLifecycleNewZoneRows.length) { alert('No data to export. Run a search first.'); return; }
+  if (typeof XLSX === 'undefined') { alert('Excel export library failed to load — check your connection and try again.'); return; }
+
+  const header = LIFECYCLE_NEW_ZONES_COLUMNS.map(c => c.label);
+  const sorted = sortByKey(lastLifecycleNewZoneRows, lifecycleNewZonesSortState);
+  const aoa = [header, ...sorted.map(r => [
+    r.branch, stripNVPrefix(r.productType), r.zone, r.totalUnitsLaunched, r.ageMonths,
+    r.balanceUnits, Number(r.balanceValue.toFixed(2)), Number(r.sellThroughPct.toFixed(1)),
+  ])];
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = header.map(() => ({ wch: 18 }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'New Zones');
+  XLSX.writeFile(wb, `product_lifecycle_new_zones_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 // ── Section 2: Lifecycle Curve ──
@@ -162,7 +357,7 @@ async function renderLifecycleCurveChart(filters) {
 const LIFECYCLE_COHORT_COLUMNS = [
   { key: 'branch',                label: 'Branch',         type: 'text' },
   { key: 'productType',           label: 'Product Type',   type: 'text',   render: r => stripNVPrefix(r.productType) },
-  { key: 'level',                 label: 'Level',           type: 'text' },
+  { key: 'zone',                  label: 'Zone',            type: 'text' },
   { key: 'cohortPeriod',          label: 'Cohort Period',   type: 'text' },
   { key: 'ageMonthsNow',          label: 'Age (months)',    type: 'number', render: r => fmt(r.ageMonthsNow) },
   { key: 'totalUnits',            label: 'Total Units',     type: 'number', render: r => fmt(r.totalUnits) },
@@ -227,26 +422,76 @@ function renderLifecycleCohortsBody() {
 
   tbody.innerHTML = rows.map(r => {
     const cells = LIFECYCLE_COHORT_COLUMNS.map(col => `<td>${col.render ? col.render(r) : (r[col.key] ?? '')}</td>`).join('');
-    const lotTypeFilter = renderLotTypeFilterHTML({ product: r.productType, branch: r.branch, priceRange: '' });
+    const lotTypeFilter = renderLotTypeFilterHTML({ product: r.productType, branch: r.branch, priceRange: '', zone: r.zone });
     const viewLotsBtn = `<button type="button" class="btn-view-lots" data-action="toggle-lifecycle-lots"
       data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}"
-      data-level="${escapeHtml(r.level)}" data-cohort-period="${escapeHtml(r.cohortPeriod)}">View Lots</button>`;
-    return `<tr class="accordion-row">${cells}<td><div class="row-actions">${lotTypeFilter}${viewLotsBtn}</div></td></tr>
-      <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>`;
+      data-zone="${escapeHtml(r.zone)}" data-cohort-period="${escapeHtml(r.cohortPeriod)}">View Lots</button>`;
+
+    // Level is only a meaningful drill-down for structured product types (flat land has no
+    // Level No values to break down) — matches STRUCTURED_MATERIAL_TYPES (dashboard.js), the
+    // same list the rest of the app uses to classify a Material Type as structured vs. flat.
+    const isStructured = STRUCTURED_MATERIAL_TYPES.includes(r.productType);
+    const levelBtn = isStructured ? `<button type="button" class="btn-expand" data-action="toggle-lifecycle-level-breakdown"
+      data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}"
+      data-zone="${escapeHtml(r.zone)}" data-cohort-period="${escapeHtml(r.cohortPeriod)}" aria-label="Level breakdown">+</button>` : '';
+    const levelDetailRow = isStructured
+      ? `<tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-level-breakdown-content></div></td></tr>`
+      : '';
+
+    return `<tr class="accordion-row">${cells}<td><div class="row-actions">${lotTypeFilter}${viewLotsBtn}${levelBtn}</div></td></tr>
+      <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>
+      ${levelDetailRow}`;
   }).join('');
 }
 
-async function renderLifecycleCohortTableSection(filters) {
+// Status Flag summary cards — one per flag, count + Balance Value under the current
+// Branch/Product Type scope (server-computed ignoring the Status Flag filter itself, see
+// getLifecycleCohortTable, so all 5 cards always show real numbers). Clicking a card jumps the
+// Status Flag filter straight to that one value; a currently-active single-flag selection gets
+// a highlighted card. The "Clear" tile resets back to all 5 flags (i.e. no filter).
+function renderLifecycleStatusFlagCards() {
+  const el = document.getElementById('lifecycleStatusFlagCards');
+  if (!el || !cohortFiltersUI.statusFlag) return;
+  const activeValues = cohortFiltersUI.statusFlag.getValues();
+  const activeFlag = activeValues.length === 1 ? activeValues[0] : null;
+
+  const cards = LIFECYCLE_STATUS_FLAGS.map(flag => {
+    const stat = lastLifecycleStatusFlagSummary.find(s => s.flag === flag) || { count: 0, balanceValue: 0 };
+    const colorCls = LIFECYCLE_STATUS_FLAG_CARD_CLASS[flag];
+    const activeCls = activeFlag === flag ? ' status-flag-card--active' : '';
+    return `<button type="button" class="status-flag-card ${colorCls}${activeCls}" data-status-flag-card="${escapeHtml(flag)}">
+      <div class="status-flag-card-count">${fmt(stat.count)}</div>
+      <div class="status-flag-card-label">${escapeHtml(flag)}</div>
+      <div class="status-flag-card-value">${myr(stat.balanceValue)}</div>
+    </button>`;
+  }).join('');
+
+  const isCleared = activeValues.length === 0 || activeValues.length === LIFECYCLE_STATUS_FLAGS.length;
+  const clearBtn = `<button type="button" class="status-flag-clear-btn${isCleared ? ' status-flag-clear-btn--active' : ''}" data-status-flag-clear>
+    Clear<span class="status-flag-clear-sub">Show All</span></button>`;
+
+  el.innerHTML = cards + clearBtn;
+}
+
+async function renderLifecycleCohortSection() {
+  const filters = {
+    branch: cohortFiltersUI.branch.getValues(),
+    productType: cohortFiltersUI.productType.getValues(),
+    statusFlag: cohortFiltersUI.statusFlag.getValues(),
+    ageMonths: lifecycleAgeMonths,
+  };
   const tbody = document.getElementById('lifecycleCohortsBody');
   if (tbody) tbody.innerHTML = `<tr><td style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
   try {
-    const { rows } = await fetchLifecycleJSON('cohort-table', filters);
+    const { rows, statusFlagSummary } = await fetchLifecycleJSON('cohort-table', filters);
     lastLifecycleCohortRows = rows || [];
+    lastLifecycleStatusFlagSummary = statusFlagSummary || [];
+    renderLifecycleStatusFlagCards();
     renderLifecycleCohortsHead();
     renderLifecycleCohortsBody();
   } catch (err) {
     if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
-    console.error('[lifecycle] renderLifecycleCohortTableSection failed:', err);
+    console.error('[lifecycle] renderLifecycleCohortSection failed:', err);
     if (tbody) tbody.innerHTML = `<tr><td style="text-align:center;color:var(--red)">Error: ${err.message}</td></tr>`;
   }
 }
@@ -262,7 +507,7 @@ function onLifecycleCohortSortClick(key) {
 // routes/lots.js's queryLotsDetail accepts an optional cohortPeriod ("YYYY-Qn") filter added
 // specifically for this — resolves to that quarter's exact date range on Lot Create On, so
 // this reuses the real /api/lots infrastructure rather than showing every OPEN lot for the
-// branch/product/level regardless of which quarter launched it.
+// branch/product/zone regardless of which quarter launched it.
 async function loadLifecycleCohortLotsContent(btn, content) {
   content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
   try {
@@ -270,7 +515,7 @@ async function loadLifecycleCohortLotsContent(btn, content) {
     const filters = {
       materialType: [btn.dataset.product],
       branch: [btn.dataset.branch],
-      level: [btn.dataset.level],
+      zone: [btn.dataset.zone],
       cohortPeriod: btn.dataset.cohortPeriod,
       status: ['OPEN'],
       lotType,
@@ -279,7 +524,7 @@ async function loadLifecycleCohortLotsContent(btn, content) {
     const totalQty = computeDrillTotalQty(rows);
     renderDrillDownPanel(content, {
       rows, mode,
-      titleLine: `${escapeHtml(stripNVPrefix(btn.dataset.product))} (${fmt(totalQty)} units) · ${escapeHtml(btn.dataset.branch)} · Level ${escapeHtml(btn.dataset.level)} · ${escapeHtml(btn.dataset.cohortPeriod)} — Unsold Lots`,
+      titleLine: `${escapeHtml(stripNVPrefix(btn.dataset.product))} (${fmt(totalQty)} units) · ${escapeHtml(btn.dataset.branch)} · Zone ${escapeHtml(btn.dataset.zone)} · ${escapeHtml(btn.dataset.cohortPeriod)} — Unsold Lots`,
       filenameBase: `lifecycle_lots_${sanitizeForFilename(btn.dataset.product)}_${sanitizeForFilename(btn.dataset.branch)}_${sanitizeForFilename(btn.dataset.cohortPeriod)}`,
     });
     content.dataset.loaded = 'true';
@@ -288,6 +533,61 @@ async function loadLifecycleCohortLotsContent(btn, content) {
     console.error('[lifecycle] loadLifecycleCohortLotsContent failed:', err);
     content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
   }
+}
+
+// Level Breakdown — the Cohort Table row's "+" expand (structured product types only). Scoped
+// to this row's exact Branch+ProductType+Zone+CohortPeriod, same grain its own View Lots
+// drills into, just aggregated by Level instead of listing individual lots.
+const LIFECYCLE_LEVEL_BREAKDOWN_COLUMNS = [
+  { key: 'level',         label: 'Level',          render: r => r.level },
+  { key: 'totalUnits',    label: 'Units',          render: r => fmt(r.totalUnits) },
+  { key: 'balanceUnits',  label: 'Balance Units',  render: r => fmt(r.balanceUnits) },
+  { key: 'balanceValue',  label: 'Balance Value',  render: r => myr(r.balanceValue) },
+  { key: 'sellThroughPct', label: 'Sell-Through %', render: r => pct(r.sellThroughPct) },
+];
+
+function renderLifecycleLevelBreakdownHTML(rows) {
+  if (!rows.length) return `<div class="drilldown-empty">No level data for this zone-cohort.</div>`;
+  const head = LIFECYCLE_LEVEL_BREAKDOWN_COLUMNS.map(c => `<th>${c.label}</th>`).join('');
+  const body = rows.map(r =>
+    `<tr>${LIFECYCLE_LEVEL_BREAKDOWN_COLUMNS.map(c => `<td>${c.render(r)}</td>`).join('')}</tr>`).join('');
+  return `<table class="drilldown-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+async function loadLifecycleLevelBreakdownContent(btn, content) {
+  content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
+  try {
+    const { rows } = await fetchLifecycleJSON('level-breakdown', {
+      branch: [btn.dataset.branch],
+      productType: [btn.dataset.product],
+      zone: [btn.dataset.zone],
+      cohortPeriod: btn.dataset.cohortPeriod,
+    });
+    content.innerHTML = renderLifecycleLevelBreakdownHTML(rows || []);
+    content.dataset.loaded = 'true';
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[lifecycle] loadLifecycleLevelBreakdownContent failed:', err);
+    content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
+  }
+}
+
+// The Level Breakdown detail row is always the SECOND accordion-detail sibling after the main
+// row (View Lots' detail row is always the first — see renderLifecycleCohortsBody), so this
+// hops one sibling further than toggleLifecycleCohortLots. Only reachable via the "+" button,
+// which only renders for structured rows that actually have this second row.
+async function toggleLifecycleLevelBreakdown(btn) {
+  const detailRow = btn.closest('tr')?.nextElementSibling?.nextElementSibling;
+  if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
+  const isOpen = detailRow.style.display !== 'none';
+  if (isOpen) { detailRow.style.display = 'none'; btn.textContent = '+'; btn.setAttribute('aria-label', 'Level breakdown'); return; }
+
+  detailRow.style.display = '';
+  btn.textContent = '−';
+  btn.setAttribute('aria-label', 'Hide level breakdown');
+  const content = detailRow.querySelector('[data-level-breakdown-content]');
+  if (content.dataset.loaded === 'true') return;
+  await loadLifecycleLevelBreakdownContent(btn, content);
 }
 
 async function toggleLifecycleCohortLots(btn) {
@@ -310,7 +610,7 @@ function exportLifecycleCohortsExcel() {
   const header = LIFECYCLE_COHORT_COLUMNS.map(c => c.label);
   const sorted = sortByKey(lastLifecycleCohortRows, lifecycleCohortSortState);
   const aoa = [header, ...sorted.map(r => [
-    r.branch, stripNVPrefix(r.productType), r.level, r.cohortPeriod, r.ageMonthsNow,
+    r.branch, stripNVPrefix(r.productType), r.zone, r.cohortPeriod, r.ageMonthsNow,
     r.totalUnits, r.balanceUnits, Number(r.balanceValue.toFixed(2)), Number(r.avgPrice.toFixed(2)),
     Number(r.overallSellThroughPct.toFixed(1)), r.statusFlag,
   ])];
@@ -322,8 +622,19 @@ function exportLifecycleCohortsExcel() {
   XLSX.writeFile(wb, `product_lifecycle_cohorts_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
-// Delegated listener for the Cohort Table's sort/View Lots/Lot Type filter/pagination/export
-// interactions — mirrors initLotResultsEvents()'s equivalent block for Lot Drill-Down.
+// Two tables share the Lot Type filter markup in this tab (Cohort Table + Newly Launched
+// Zones) — resolves which row's View Lots button/loader a given filter instance belongs to,
+// same pattern as dashboard.js's pricingLotTypeFilterOptionsFor.
+function lifecycleLotTypeFilterOptionsFor(row) {
+  if (row?.querySelector('button[data-action="toggle-lifecycle-newzone-lots"]')) {
+    return { buttonSelector: 'button[data-action="toggle-lifecycle-newzone-lots"]', loader: loadLifecycleNewZoneLotsContent };
+  }
+  return { buttonSelector: 'button[data-action="toggle-lifecycle-lots"]', loader: loadLifecycleCohortLotsContent };
+}
+
+// Delegated listener for the Cohort Table's and Newly Launched Zones' sort/View Lots/Level
+// Breakdown/Lot Type filter/pagination/export interactions — mirrors initLotResultsEvents()'s
+// equivalent block for Lot Drill-Down.
 function initLifecycleTabEvents() {
   const panel = document.getElementById('tab-lifecycle');
   if (!panel) return;
@@ -339,18 +650,49 @@ function initLifecycleTabEvents() {
       return;
     }
 
+    const newZonePageBtn = e.target.closest('button[data-lifecycle-newzone-page]');
+    if (newZonePageBtn) {
+      const raw = newZonePageBtn.dataset.lifecycleNewzonePage;
+      lifecycleNewZonesPageSize = raw === 'all' ? 'all' : Number(raw);
+      renderLifecycleNewZonesBody();
+      return;
+    }
+
     const th = e.target.closest('th[data-lifecycle-key]');
     if (th) { onLifecycleCohortSortClick(th.dataset.lifecycleKey); return; }
+
+    const newZoneTh = e.target.closest('th[data-lifecycle-newzone-key]');
+    if (newZoneTh) { onLifecycleNewZonesSortClick(newZoneTh.dataset.lifecycleNewzoneKey); return; }
 
     const viewLotsBtn = e.target.closest('button[data-action="toggle-lifecycle-lots"]');
     if (viewLotsBtn) { toggleLifecycleCohortLots(viewLotsBtn); return; }
 
+    const newZoneViewLotsBtn = e.target.closest('button[data-action="toggle-lifecycle-newzone-lots"]');
+    if (newZoneViewLotsBtn) { toggleLifecycleNewZoneLots(newZoneViewLotsBtn); return; }
+
+    const levelBreakdownBtn = e.target.closest('button[data-action="toggle-lifecycle-level-breakdown"]');
+    if (levelBreakdownBtn) { toggleLifecycleLevelBreakdown(levelBreakdownBtn); return; }
+
+    const statusFlagCardBtn = e.target.closest('button[data-status-flag-card]');
+    if (statusFlagCardBtn) {
+      cohortFiltersUI.statusFlag.setSelectedValues([statusFlagCardBtn.dataset.statusFlagCard]);
+      renderLifecycleStatusFlagCards();
+      renderLifecycleCohortSection();
+      return;
+    }
+
+    const statusFlagClearBtn = e.target.closest('button[data-status-flag-clear]');
+    if (statusFlagClearBtn) {
+      cohortFiltersUI.statusFlag.setSelectedValues(LIFECYCLE_STATUS_FLAGS);
+      renderLifecycleStatusFlagCards();
+      renderLifecycleCohortSection();
+      return;
+    }
+
     const lotTypeCb = e.target.closest('[data-lot-type-filter] input[type="checkbox"]');
     if (lotTypeCb) {
-      onLotTypeFilterChanged(lotTypeCb.closest('[data-lot-type-filter]'), {
-        buttonSelector: 'button[data-action="toggle-lifecycle-lots"]',
-        loader: loadLifecycleCohortLotsContent,
-      });
+      const details = lotTypeCb.closest('[data-lot-type-filter]');
+      onLotTypeFilterChanged(details, lifecycleLotTypeFilterOptionsFor(details.closest('tr')));
       return;
     }
 
@@ -358,10 +700,7 @@ function initLifecycleTabEvents() {
     if (lotTypeSelectAll) {
       const details = lotTypeSelectAll.closest('[data-lot-type-filter]');
       details.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = true; });
-      onLotTypeFilterChanged(details, {
-        buttonSelector: 'button[data-action="toggle-lifecycle-lots"]',
-        loader: loadLifecycleCohortLotsContent,
-      });
+      onLotTypeFilterChanged(details, lifecycleLotTypeFilterOptionsFor(details.closest('tr')));
       return;
     }
 
@@ -369,10 +708,7 @@ function initLifecycleTabEvents() {
     if (lotTypeClearAll) {
       const details = lotTypeClearAll.closest('[data-lot-type-filter]');
       details.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
-      onLotTypeFilterChanged(details, {
-        buttonSelector: 'button[data-action="toggle-lifecycle-lots"]',
-        loader: loadLifecycleCohortLotsContent,
-      });
+      onLotTypeFilterChanged(details, lifecycleLotTypeFilterOptionsFor(details.closest('tr')));
       return;
     }
   });
@@ -404,12 +740,16 @@ async function renderLifecycleAgentFocus(filters) {
 }
 
 // ── Orchestration ──
+// renderLifecycleCohortSection() takes no filters arg — the Cohort Table reads its own
+// decoupled cohortFiltersUI (see initLifecycleCohortFilters), not the tab-wide filters used by
+// the other four sections here.
 async function renderProductLifecycle() {
   const filters = getLifecycleFilterValues();
   await Promise.all([
     renderLifecycleOverview(filters),
+    renderLifecycleNewZonesSection(filters),
     renderLifecycleCurveChart(filters),
-    renderLifecycleCohortTableSection(filters),
+    renderLifecycleCohortSection(),
     renderLifecycleAgentFocus(filters),
   ]);
 }
@@ -419,7 +759,7 @@ async function renderProductLifecycle() {
 async function onLifecycleTabActivated() {
   if (lifecycleLoaded) return;
   lifecycleLoaded = true;
-  await lifecycleFiltersReady;
+  await Promise.all([lifecycleFiltersReady, lifecycleCohortFiltersReady]);
   renderProductLifecycle();
 }
 
@@ -429,9 +769,11 @@ function refreshLifecycleForBigLotFilter() {
 }
 
 initLifecycleFilters();
+initLifecycleCohortFilters();
 initLifecycleTabEvents();
 
 window.renderProductLifecycle = renderProductLifecycle;
 window.exportLifecycleCohortsExcel = exportLifecycleCohortsExcel;
+window.exportLifecycleNewZonesExcel = exportLifecycleNewZonesExcel;
 window.onLifecycleTabActivated = onLifecycleTabActivated;
 window.refreshLifecycleForBigLotFilter = refreshLifecycleForBigLotFilter;

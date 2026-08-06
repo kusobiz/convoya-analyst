@@ -796,13 +796,35 @@
         </div>
       </div>
 
+      <!-- Section 1b: Newly Launched Zones -->
+      <div class="table-card">
+        <h3 class="table-title">Newly Launched Zones</h3>
+        <div class="drilldown-toolbar" id="lifecycleNewZonesToolbar"></div>
+        <div class="table-scroll">
+          <table id="tableLifecycleNewZones">
+            <thead><tr id="lifecycleNewZonesHeadRow"></tr></thead>
+            <tbody id="lifecycleNewZonesBody">
+              <tr><td style="text-align:center;color:var(--muted)">Click Search to load newly launched zones.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="report-btns" style="margin-top:0.75rem;">
+          <button class="btn-report" onclick="exportLifecycleNewZonesExcel()">
+            <span>&#11015;</span> Export to Excel
+          </button>
+        </div>
+        <p class="lot-filter-help">One row per Branch + Product Type + Zone whose EARLIEST lot was created within
+          the New / Aging Threshold above — i.e. the whole zone is a recent launch, not just a few individual lots
+          trickling in. Click "View Lots" to see that zone's unsold (OPEN) lots.</p>
+      </div>
+
       <!-- Section 2: Lifecycle Curve -->
       <div class="chart-card chart-card--wide">
         <h3 class="chart-title">Lifecycle Curve — Cumulative Sell-Through % by Months Since Launch</h3>
         <div class="chart-wrap chart-wrap--velocity">
           <canvas id="chartLifecycleCurve"></canvas>
         </div>
-        <p class="lot-filter-help">One line per cohort (Branch + Product Type + Level + launch quarter) — the
+        <p class="lot-filter-help">One line per cohort (Branch + Product Type + Zone + launch quarter) — the
           largest cohorts by unit count, narrowed by the filters above. Split by Branch/Product Type/Level using
           those same filters to focus the chart on fewer cohorts.</p>
         <div class="chart-empty-state" id="lifecycleCurveEmpty" style="display:none;">Click Search to load cohorts.</div>
@@ -811,6 +833,39 @@
       <!-- Section 3: Cohort Table -->
       <div class="table-card">
         <h3 class="table-title">Cohort Table</h3>
+
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="cohortBranch">Branch</label>
+            <div class="ms" id="cohortBranch"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="cohortProductType">Product Type</label>
+            <div class="ms" id="cohortProductType"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="cohortStatusFlag">Status Flag</label>
+            <div class="ms" id="cohortStatusFlag"></div>
+          </div>
+        </div>
+        <p class="lot-filter-help">Branch, Product Type and Status Flag here are independent filters scoped to the
+          Cohort Table and its summary cards below — separate from the Branch/Product Type/Level filters above,
+          which drive the rest of this tab. New / Aging Threshold above still applies (it decides what "New" means
+          for Status Flag).</p>
+
+        <div class="status-flag-summary" id="lifecycleStatusFlagCards"></div>
+        <details class="status-flag-legend">
+          <summary>What do these Status Flags mean?</summary>
+          <div class="status-flag-legend-body">
+            <p><strong>New</strong> — Launched within the selected age window — too early to judge performance yet.</p>
+            <p><strong>Steady</strong> — Still selling at a reasonable pace relative to its own early performance, even if that pace was always modest.</p>
+            <p><strong>Slowing</strong> — Recent selling pace has dropped below 70% of its early pace — an early warning sign.</p>
+            <p><strong>Stagnant</strong> — Recent selling pace has collapsed below 30% of its early pace — this launch has lost real momentum, worth investigating (design relevance, pricing, or awareness).</p>
+            <p><strong>Sold Out</strong> — Fully cleared — no remaining balance, no longer part of the inventory burden.</p>
+            <p class="status-flag-legend-note">Early pace = sell-through in the first 3 months after launch. Recent pace = sell-through in the most recent 3 months relative to today.</p>
+          </div>
+        </details>
+
         <div class="drilldown-toolbar" id="lifecycleCohortsToolbar"></div>
         <div class="table-scroll">
           <table id="tableLifecycleCohorts">
@@ -826,9 +881,8 @@
           </button>
         </div>
         <p class="lot-filter-help">Click "View Lots" on a row to drill into that cohort's individual unsold (OPEN)
-          lots, with a Lot Type filter scoped to that cohort. Status Flag: New = too young to judge yet, Steady =
-          selling at a consistent pace, Slowing = momentum fading, Stagnant = essentially stalled, Sold Out = fully
-          cleared.</p>
+          lots, with a Lot Type filter scoped to that cohort. For structured product types, click "+" to break the
+          zone-cohort down by Level.</p>
       </div>
 
       <!-- Section 4: Agent Focus Snapshot -->
