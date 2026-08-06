@@ -16,6 +16,27 @@ function getDb() {
 const STRUCTURED_TYPES = ['NV Niche', 'NV Pedestal', 'NV Pet Niche', 'NV EBL', 'NV Baby Paradise'];
 const FLAT_TYPES = ['NV Burial Plot', 'NV Seed', 'NV Urn Burial Plot', 'NV Pet Burial Plot'];
 
+// Sorts Price Range labels (e.g. "≥500k", "<100k") by actual price magnitude, descending —
+// the raw DB/alphabetical order reads meaninglessly (e.g. "<100k" sorts before "<10k"). Ties
+// at the same magnitude (e.g. "≥100k" vs "<100k") put "≥" before "<", so the dropdown reads
+// as one continuous scale from the top tier down. Mirrors routes/pricing.js's copy.
+function sortPriceRangesDesc(list) {
+  const parse = (s) => {
+    const m = String(s).match(/([<≥])\s*([\d.]+)\s*(k|m)?/i);
+    if (!m) return { magnitude: -Infinity, isGte: false };
+    let magnitude = parseFloat(m[2]);
+    const unit = (m[3] || '').toLowerCase();
+    if (unit === 'k') magnitude *= 1_000;
+    else if (unit === 'm') magnitude *= 1_000_000;
+    return { magnitude, isGte: m[1] === '≥' };
+  };
+  return [...list].sort((a, b) => {
+    const pa = parse(a), pb = parse(b);
+    if (pa.magnitude !== pb.magnitude) return pb.magnitude - pa.magnitude;
+    return (pb.isGte ? 1 : 0) - (pa.isGte ? 1 : 0);
+  });
+}
+
 export function classifyMaterialType(materialType) {
   if (!materialType) return null;
   const norm = String(materialType).trim().toLowerCase();
@@ -54,6 +75,13 @@ const FILTER_COLUMNS = {
   priceRange:   'Price Range',
 };
 
+// "Big Lot" = Unit Price >= 500,000 MYR, matching the existing "≥500k" Price Range tier.
+function bigLotClause(bigLotFilter) {
+  if (bigLotFilter === 'exclude') return `"Unit Price" < 500000`;
+  if (bigLotFilter === 'only') return `"Unit Price" >= 500000`;
+  return null;
+}
+
 // Every filter accepts either a single value or an array — empty/missing means "All" (no filter).
 function buildWhere(filters) {
   const clauses = [];
@@ -68,6 +96,8 @@ function buildWhere(filters) {
       params.push(...list);
     }
   }
+  const bigLot = bigLotClause(filters.bigLotFilter);
+  if (bigLot) clauses.push(bigLot);
   return {
     where: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '',
     params,
@@ -124,6 +154,20 @@ const LOT_CREATE_DATE_EXPR = `(
 )`;
 const AGE_DAYS_EXPR = `CAST(julianday('now') - julianday(${LOT_CREATE_DATE_EXPR}) AS INTEGER)`;
 
+// Parses "YYYY-Qn" (Product Lifecycle's CohortPeriod) into a [start, end) date range on Lot
+// Create On — lets that tab's View Lots scope down to one cohort's exact launch quarter.
+function cohortPeriodDateRange(cohortPeriod) {
+  const m = /^(\d{4})-Q([1-4])$/.exec(String(cohortPeriod || ''));
+  if (!m) return null;
+  const year = Number(m[1]);
+  const startMonth = (Number(m[2]) - 1) * 3 + 1;
+  const start = `${year}-${String(startMonth).padStart(2, '0')}-01`;
+  const endYear = startMonth + 3 > 12 ? year + 1 : year;
+  const endMonth = ((startMonth + 3 - 1) % 12) + 1;
+  const end = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
+  return { start, end };
+}
+
 // Finer-grained lot listing used by cross-tab drill-downs (e.g. Pricing Intelligence)
 // that need Suite/Section visibility and per-lot age filtering, beyond the Zone/Level
 // summary grain the main Lot Drill-Down table (queryLots) groups at. Reuses the same
@@ -135,6 +179,10 @@ export function queryLotsDetail(filters = {}) {
   const extra = [];
   if (filters.minAgeDays !== undefined && filters.minAgeDays !== null && filters.minAgeDays !== '') {
     extra.push(`${AGE_DAYS_EXPR} > ${Number(filters.minAgeDays)}`);
+  }
+  const cohortRange = filters.cohortPeriod ? cohortPeriodDateRange(filters.cohortPeriod) : null;
+  if (cohortRange) {
+    extra.push(`${LOT_CREATE_DATE_EXPR} >= '${cohortRange.start}' AND ${LOT_CREATE_DATE_EXPR} < '${cohortRange.end}'`);
   }
   const fullWhere = extra.length
     ? (where ? `${where} AND ${extra.join(' AND ')}` : `WHERE ${extra.join(' AND ')}`)
@@ -187,51 +235,64 @@ export function queryLotsDetail(filters = {}) {
   `).all(...params);
 }
 
-function distinctColumn(col, whereClause, params, upper = false) {
+function distinctColumn(col, whereClause, params, upper = false, extraFilter = null) {
   const expr = upper ? `UPPER(TRIM("${col}"))` : `TRIM("${col}")`;
-  const notEmpty = `"${col}" IS NOT NULL AND TRIM("${col}") != ''`;
+  const conditions = [`"${col}" IS NOT NULL AND TRIM("${col}") != ''`];
+  if (extraFilter) conditions.push(extraFilter);
   const sql = whereClause
-    ? `SELECT DISTINCT ${expr} AS val FROM master_stock ${whereClause} AND ${notEmpty} ORDER BY val`
-    : `SELECT DISTINCT ${expr} AS val FROM master_stock WHERE ${notEmpty} ORDER BY val`;
+    ? `SELECT DISTINCT ${expr} AS val FROM master_stock ${whereClause} AND ${conditions.join(' AND ')} ORDER BY val`
+    : `SELECT DISTINCT ${expr} AS val FROM master_stock WHERE ${conditions.join(' AND ')} ORDER BY val`;
   return getDb().prepare(sql).all(...params).map(r => r.val);
 }
 
 // Material types are scoped by branch (the only filter chosen before this one in the cascade).
 export function getMaterialTypes(filters = {}) {
-  const { branch } = filters;
-  const { where, params } = buildWhere({ branch });
+  const { branch, bigLotFilter } = filters;
+  const { where, params } = buildWhere({ branch, bigLotFilter });
   return distinctColumn('Material Type Desc.', where, params);
 }
 
-export function getBranches() {
-  return distinctColumn('Branch', '', []);
+export function getBranches(filters = {}) {
+  const { bigLotFilter } = filters;
+  const { where, params } = buildWhere({ bigLotFilter });
+  return distinctColumn('Branch', where, params);
 }
 
-// Zones are scoped by branch + material type.
+// Price Ranges are scoped by branch + material type, mirroring routes/pricing.js's
+// getPricingFilters — a sibling of Zone in the cascade (same dependency depth), not a
+// descendant of it. A handful of product types carry the literal string 'false' in Price
+// Range because they have no defined price bands; excluded here same as routes/pricing.js.
+export function getPriceRanges(filters = {}) {
+  const { branch, materialType, bigLotFilter } = filters;
+  const { where, params } = buildWhere({ branch, materialType, bigLotFilter });
+  return sortPriceRangesDesc(distinctColumn('Price Range', where, params, false, `TRIM("Price Range") != 'false'`));
+}
+
+// Zones are scoped by branch + material type + price range.
 export function getZones(filters = {}) {
-  const { branch, materialType } = filters;
-  const { where, params } = buildWhere({ branch, materialType });
+  const { branch, materialType, priceRange, bigLotFilter } = filters;
+  const { where, params } = buildWhere({ branch, materialType, priceRange, bigLotFilter });
   return distinctColumn('Zone', where, params);
 }
 
-// Suite numbers are scoped by branch + material type + zone (the suite itself hasn't been chosen yet).
+// Suite numbers are scoped by branch + material type + price range + zone (the suite itself hasn't been chosen yet).
 export function getSuiteNos(filters = {}) {
-  const { branch, zone, materialType } = filters;
-  const { where, params } = buildWhere({ branch, zone, materialType });
+  const { branch, zone, materialType, priceRange, bigLotFilter } = filters;
+  const { where, params } = buildWhere({ branch, zone, materialType, priceRange, bigLotFilter });
   return distinctColumn('Suite No', where, params);
 }
 
-// Sections are scoped by branch + material type + zone + suite.
+// Sections are scoped by branch + material type + price range + zone + suite.
 export function getSections(filters = {}) {
-  const { branch, zone, suiteNo, materialType } = filters;
-  const { where, params } = buildWhere({ branch, zone, suiteNo, materialType });
+  const { branch, zone, suiteNo, materialType, priceRange, bigLotFilter } = filters;
+  const { where, params } = buildWhere({ branch, zone, suiteNo, materialType, priceRange, bigLotFilter });
   return distinctColumn('Section', where, params);
 }
 
 // Levels are scoped by the full location cascade selected so far.
 export function getLevels(filters = {}) {
-  const { branch, zone, suiteNo, section, materialType } = filters;
-  const { where, params } = buildWhere({ branch, zone, suiteNo, section, materialType });
+  const { branch, zone, suiteNo, section, materialType, priceRange, bigLotFilter } = filters;
+  const { where, params } = buildWhere({ branch, zone, suiteNo, section, materialType, priceRange, bigLotFilter });
   return distinctColumn('Level No', where, params);
 }
 
@@ -240,15 +301,15 @@ export function getLevels(filters = {}) {
 // which scopes to one row's exact Product Type + Price Range + Branch combination so it
 // never offers a Lot Type that would return zero results for that row.
 export function getLotTypes(filters = {}) {
-  const { branch, zone, materialType, priceRange } = filters;
-  const { where, params } = buildWhere({ branch, zone, materialType, priceRange });
+  const { branch, zone, materialType, priceRange, bigLotFilter } = filters;
+  const { where, params } = buildWhere({ branch, zone, materialType, priceRange, bigLotFilter });
   return distinctColumn('Lot Type', where, params);
 }
 
 // Statuses are scoped by whatever of the cascade has been selected so far.
 export function getStatuses(filters = {}) {
-  const { branch, zone, suiteNo, section, materialType, lotType } = filters;
-  const { where, params } = buildWhere({ branch, zone, suiteNo, section, materialType, lotType });
+  const { branch, zone, suiteNo, section, materialType, lotType, priceRange, bigLotFilter } = filters;
+  const { where, params } = buildWhere({ branch, zone, suiteNo, section, materialType, lotType, priceRange, bigLotFilter });
   return distinctColumn('Status', where, params, true);
 }
 
@@ -266,14 +327,17 @@ router.post('/', (req, res) => {
   }
 });
 
-// Material type (scoped by branch) + branch lists, and structured/flat classification for the selected type(s).
+// Material type (scoped by branch) + branch + Price Range lists (Price Range scoped by
+// branch + material type, a sibling of Zone in the cascade), and structured/flat
+// classification for the selected type(s).
 router.get('/filters', (req, res) => {
   try {
-    const { branch } = req.query;
-    const materialTypes = getMaterialTypes({ branch });
-    const branches = getBranches();
-    const mode = classifyMaterialTypes(req.query.materialType);
-    res.json({ materialTypes, branches, mode });
+    const { branch, materialType, bigLotFilter } = req.query;
+    const materialTypes = getMaterialTypes({ branch, bigLotFilter });
+    const branches = getBranches({ bigLotFilter });
+    const priceRanges = getPriceRanges({ branch, materialType, bigLotFilter });
+    const mode = classifyMaterialTypes(materialType);
+    res.json({ materialTypes, branches, priceRanges, mode });
   } catch (err) {
     console.error('Lot filters query error:', err.message);
     res.status(500).json({ error: err.message });
@@ -282,8 +346,8 @@ router.get('/filters', (req, res) => {
 
 router.get('/zones', (req, res) => {
   try {
-    const { branch, materialType } = req.query;
-    const zones = getZones({ branch, materialType });
+    const { branch, materialType, priceRange, bigLotFilter } = req.query;
+    const zones = getZones({ branch, materialType, priceRange, bigLotFilter });
     res.json({ zones });
   } catch (err) {
     console.error('Lot zones query error:', err.message);
@@ -293,9 +357,9 @@ router.get('/zones', (req, res) => {
 
 router.get('/suites', (req, res) => {
   try {
-    const { branch, zone, materialType } = req.query;
-    const suites   = getSuiteNos({ branch, zone, materialType });
-    const statuses = getStatuses({ branch, zone, materialType });
+    const { branch, zone, materialType, priceRange, bigLotFilter } = req.query;
+    const suites   = getSuiteNos({ branch, zone, materialType, priceRange, bigLotFilter });
+    const statuses = getStatuses({ branch, zone, materialType, priceRange, bigLotFilter });
     res.json({ suites, statuses });
   } catch (err) {
     console.error('Lot suites query error:', err.message);
@@ -305,9 +369,9 @@ router.get('/suites', (req, res) => {
 
 router.get('/sections', (req, res) => {
   try {
-    const { branch, zone, suiteNo, materialType } = req.query;
-    const sections = getSections({ branch, zone, suiteNo, materialType });
-    const statuses = getStatuses({ branch, zone, suiteNo, materialType });
+    const { branch, zone, suiteNo, materialType, priceRange, bigLotFilter } = req.query;
+    const sections = getSections({ branch, zone, suiteNo, materialType, priceRange, bigLotFilter });
+    const statuses = getStatuses({ branch, zone, suiteNo, materialType, priceRange, bigLotFilter });
     res.json({ sections, statuses });
   } catch (err) {
     console.error('Lot sections query error:', err.message);
@@ -317,9 +381,9 @@ router.get('/sections', (req, res) => {
 
 router.get('/levels', (req, res) => {
   try {
-    const { branch, zone, suiteNo, section, materialType } = req.query;
-    const levels   = getLevels({ branch, zone, suiteNo, section, materialType });
-    const statuses = getStatuses({ branch, zone, suiteNo, section, materialType });
+    const { branch, zone, suiteNo, section, materialType, priceRange, bigLotFilter } = req.query;
+    const levels   = getLevels({ branch, zone, suiteNo, section, materialType, priceRange, bigLotFilter });
+    const statuses = getStatuses({ branch, zone, suiteNo, section, materialType, priceRange, bigLotFilter });
     res.json({ levels, statuses });
   } catch (err) {
     console.error('Lot levels query error:', err.message);
@@ -329,9 +393,9 @@ router.get('/levels', (req, res) => {
 
 router.get('/lotTypes', (req, res) => {
   try {
-    const { branch, zone, materialType, priceRange } = req.query;
-    const lotTypes = getLotTypes({ branch, zone, materialType, priceRange });
-    const statuses = getStatuses({ branch, zone, materialType });
+    const { branch, zone, materialType, priceRange, bigLotFilter } = req.query;
+    const lotTypes = getLotTypes({ branch, zone, materialType, priceRange, bigLotFilter });
+    const statuses = getStatuses({ branch, zone, materialType, priceRange, bigLotFilter });
     res.json({ lotTypes, statuses });
   } catch (err) {
     console.error('Lot lotTypes query error:', err.message);

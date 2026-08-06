@@ -20,6 +20,7 @@ import reportRouter from './routes/report.js';
 import lotsRouter from './routes/lots.js';
 import pricingRouter from './routes/pricing.js';
 import velocityRouter from './routes/velocity.js';
+import lifecycleRouter from './routes/lifecycle.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -50,16 +51,17 @@ app.get('/', (req, res) => {
 // Batch dashboard data
 app.get('/api/data', (req, res) => {
   try {
+    const filters = { bigLotFilter: req.query.bigLotFilter };
     res.json({
-      overview:    getOverview(),
-      branches:    getBranchSummary(),
-      products:    getProductSummary(),
-      bdFocus:     getBDFocusSummary(),
-      statuses:    getStatusBreakdown(),
-      priceRanges: getPriceRangeSummary(),
-      lotTypes:    getLotTypeSummary(),
-      agedStock:   getAgedStock().slice(0, 20),
-      matrix:      getBranchProductMatrix(),
+      overview:    getOverview(filters),
+      branches:    getBranchSummary(filters),
+      products:    getProductSummary(filters),
+      bdFocus:     getBDFocusSummary(filters),
+      statuses:    getStatusBreakdown(filters),
+      priceRanges: getPriceRangeSummary(filters),
+      lotTypes:    getLotTypeSummary(filters),
+      agedStock:   getAgedStock(filters).slice(0, 20),
+      matrix:      getBranchProductMatrix(filters),
     });
   } catch (err) {
     console.error('Data load error:', err.message);
@@ -82,6 +84,7 @@ app.use('/api/report', reportRouter);
 app.use('/api/lots', lotsRouter);
 app.use('/api/pricing', pricingRouter);
 app.use('/api/velocity', velocityRouter);
+app.use('/api/lifecycle', lifecycleRouter);
 
 app.listen(PORT, () => {
   console.log(`analyst running on http://localhost:${PORT}`);

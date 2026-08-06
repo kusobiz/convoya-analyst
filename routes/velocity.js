@@ -54,6 +54,13 @@ const SPLIT_COLUMNS = {
 // from different branches sharing a code silently merge into one series.
 const LOCATION_SPLIT_KEYS = ['zone', 'suiteNo', 'section', 'level'];
 
+// "Big Lot" = Unit Price >= 500,000 MYR, matching the existing "≥500k" Price Range tier.
+function bigLotClause(bigLotFilter) {
+  if (bigLotFilter === 'exclude') return `"Unit Price" < 500000`;
+  if (bigLotFilter === 'only') return `"Unit Price" >= 500000`;
+  return null;
+}
+
 // Every filter accepts either a single value or an array — empty/missing means "All" (no filter).
 function buildWhere(filters, extraClauses = []) {
   const clauses = [...extraClauses];
@@ -68,6 +75,8 @@ function buildWhere(filters, extraClauses = []) {
       params.push(...list);
     }
   }
+  const bigLot = bigLotClause(filters.bigLotFilter);
+  if (bigLot) clauses.push(bigLot);
   return {
     where: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '',
     params,
@@ -151,33 +160,33 @@ export function getSalesVelocity(body = {}) {
 // order — mirrors routes/lots.js's location cascade, extended with the sales-specific
 // dimensions. All scoped to SOLD_ONLY so no dropdown offers a combo with zero sold lots.
 export function getVelocityFilters(filters = {}) {
-  const { branch, productType, zone, suiteNo, section, level, eyeLevel, lotType } = filters;
+  const { branch, productType, zone, suiteNo, section, level, eyeLevel, lotType, bigLotFilter } = filters;
   const base = [SOLD_ONLY];
 
-  const { where: w0, params: p0 } = buildWhere({}, base);
+  const { where: w0, params: p0 } = buildWhere({ bigLotFilter }, base);
   const branches = distinctColumn('Branch', w0, p0);
 
-  const { where: w1, params: p1 } = buildWhere({ branch }, base);
+  const { where: w1, params: p1 } = buildWhere({ branch, bigLotFilter }, base);
   const productTypes = distinctColumn('Material Type Desc.', w1, p1);
 
   const mode = classifyMaterialTypes(productType);
 
-  const { where: w2, params: p2 } = buildWhere({ branch, productType }, base);
+  const { where: w2, params: p2 } = buildWhere({ branch, productType, bigLotFilter }, base);
   const zones = distinctColumn('Zone', w2, p2);
 
-  const { where: w3, params: p3 } = buildWhere({ branch, productType, zone }, base);
+  const { where: w3, params: p3 } = buildWhere({ branch, productType, zone, bigLotFilter }, base);
   const suiteNos = distinctColumn('Suite No', w3, p3);
 
-  const { where: w4, params: p4 } = buildWhere({ branch, productType, zone, suiteNo }, base);
+  const { where: w4, params: p4 } = buildWhere({ branch, productType, zone, suiteNo, bigLotFilter }, base);
   const sections = distinctColumn('Section', w4, p4);
 
-  const { where: w5, params: p5 } = buildWhere({ branch, productType, zone, suiteNo, section }, base);
+  const { where: w5, params: p5 } = buildWhere({ branch, productType, zone, suiteNo, section, bigLotFilter }, base);
   const levels = distinctColumn('Level No', w5, p5);
 
-  const { where: w6, params: p6 } = buildWhere({ branch, productType, zone, suiteNo, section, level }, base);
+  const { where: w6, params: p6 } = buildWhere({ branch, productType, zone, suiteNo, section, level, bigLotFilter }, base);
   const eyeLevels = distinctColumn('Eye Level/Non Eye Level', w6, p6);
 
-  const { where: w7, params: p7 } = buildWhere({ branch, productType, zone, suiteNo, section, level, eyeLevel }, base);
+  const { where: w7, params: p7 } = buildWhere({ branch, productType, zone, suiteNo, section, level, eyeLevel, bigLotFilter }, base);
   const lotTypes = distinctColumn('Lot Type', w7, p7);
 
   return { branches, productTypes, zones, suiteNos, sections, levels, eyeLevels, lotTypes, mode, dateRange: getDateRange() };

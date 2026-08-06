@@ -63,6 +63,44 @@ function miniBar(val, color) {
     </div>`;
 }
 
+// ── Global "Big Lot" filter (Unit Price >= 500,000 MYR) — one control in the header,
+// applied to every tab's API requests via the choke points below (buildArrayQuery,
+// fetchLotsDetail, fetchPricingJSON, the /api/data fetch, and velocity.js's fetchVeloJSON).
+window.bigLotFilter = 'all';
+
+function updateBigLotBadge() {
+  const badge = document.getElementById('bigLotBadge');
+  if (!badge) return;
+  if (window.bigLotFilter === 'exclude') {
+    badge.textContent = 'Filtering: Excluding Big Lots (≥500K)';
+    badge.hidden = false;
+  } else if (window.bigLotFilter === 'only') {
+    badge.textContent = 'Filtering: Big Lots Only (≥500K)';
+    badge.hidden = false;
+  } else {
+    badge.hidden = true;
+  }
+}
+
+// Re-runs every tab that already has data on screen so switching the header control once
+// refreshes Overview/Branch/Product/BD Focus immediately, plus Lot Drill-Down, Pricing
+// Intelligence and Sales Velocity if the user has already searched/opened them.
+function onBigLotFilterChange() {
+  const select = document.getElementById('bigLotFilterSelect');
+  window.bigLotFilter = select ? select.value : 'all';
+  updateBigLotBadge();
+
+  initDashboard();
+  renderLotDrillDown();
+  if (pricingLoaded) {
+    renderPricingIntelligence();
+    generatePricingPivot();
+  }
+  if (typeof refreshVelocityForBigLotFilter === 'function') refreshVelocityForBigLotFilter();
+  if (typeof refreshLifecycleForBigLotFilter === 'function') refreshLifecycleForBigLotFilter();
+}
+window.onBigLotFilterChange = onBigLotFilterChange;
+
 // ── Chart instances (kept for potential future destroy/re-create) ──
 let charts = {};
 
@@ -426,8 +464,10 @@ function lotColumnsFor(mode) {
   return LOT_COLUMNS[mode] || LOT_COLUMNS.structured;
 }
 
+// +1 for the trailing View Lots action column (not a sortable data column, so it isn't part
+// of LOT_COLUMNS itself).
 function lotTableColumnCount(mode) {
-  return lotColumnsFor(mode).length;
+  return lotColumnsFor(mode).length + 1;
 }
 
 // { key: null } means unsorted (server/group order).
@@ -452,7 +492,28 @@ function renderLotsTableHead(mode) {
     const isSorted = lotSortState.key === col.key;
     const arrow = isSorted ? `<span class="sort-arrow">${lotSortState.dir === 'asc' ? '▲' : '▼'}</span>` : '';
     return `<th class="sortable-th${isSorted ? ' sorted' : ''}" data-key="${col.key}">${col.label}${arrow}</th>`;
-  }).join('');
+  }).join('') + '<th></th>';
+}
+
+// Lot Results rows are already grouped by Zone+Level+Lot Type+Status (structured) or
+// Lot Type+Status (flat) — see queryLots in routes/lots.js — granular enough that View Lots
+// attaches directly to the row, no intermediate breakdown step needed. Branch/Price Range
+// aren't part of that grouping (a row can span every branch/price range currently in scope),
+// so the underlying fetch reads those live from the filter panel — see
+// loadLotResultRowLotsContent — the same "no single pinned value, fall back to the tab's own
+// filter" approach Aged Inventory's Zone Breakdown already uses for its multi-branch rows.
+function renderLotResultViewLotsCell(r, mode) {
+  const lotTypeFilter = renderLotTypeFilterHTML({
+    product: r.materialType,
+    priceRange: '', // Price Range is scoped at the filter-panel level here, not per row
+    zone: mode === 'structured' ? r.zone : undefined,
+  });
+  const zoneAttr = mode === 'structured' ? ` data-zone="${escapeHtml(r.zone)}"` : '';
+  const levelAttr = mode === 'structured' ? ` data-level="${escapeHtml(r.level)}"` : '';
+  const viewLotsBtn = `<button type="button" class="btn-view-lots" data-action="toggle-lotresult-lots"
+    data-material-type="${escapeHtml(r.materialType)}" data-lot-type="${escapeHtml(r.lotType)}"
+    data-status="${escapeHtml(r.status)}"${zoneAttr}${levelAttr}>View Lots</button>`;
+  return `<div class="row-actions">${lotTypeFilter}${viewLotsBtn}</div>`;
 }
 
 function renderLotResultsBody(mode) {
@@ -461,7 +522,7 @@ function renderLotResultsBody(mode) {
   if (!tbody) return;
 
   const columns = lotColumnsFor(mode);
-  const colCount = columns.length;
+  const colCount = lotTableColumnCount(mode);
   const rows = sortLotRows(lastLotRows, lotSortState);
 
   if (!rows.length) {
@@ -470,16 +531,18 @@ function renderLotResultsBody(mode) {
     return;
   }
 
-  tbody.innerHTML = rows.map(r => `<tr>${
-    columns.map(col => `<td>${col.render ? col.render(r) : (r[col.key] ?? '')}</td>`).join('')
-  }</tr>`).join('');
+  tbody.innerHTML = rows.map(r => {
+    const cells = columns.map(col => `<td>${col.render ? col.render(r) : (r[col.key] ?? '')}</td>`).join('');
+    return `<tr class="accordion-row">${cells}<td>${renderLotResultViewLotsCell(r, mode)}</td></tr>
+      <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>`;
+  }).join('');
 
   const t = sumLotRows(lastLotRows);
   const textColCount = columns.filter(c => c.type === 'text').length;
   const numericCells = columns.filter(c => c.type === 'number')
     .map(col => `<td>${col.key === 'totalBalanceAmount' ? myr(t[col.key]) : fmt(t[col.key])}</td>`).join('');
   if (tfoot) {
-    tfoot.innerHTML = `<tr class="totals-row"><td colspan="${textColCount}">Totals</td>${numericCells}</tr>`;
+    tfoot.innerHTML = `<tr class="totals-row"><td colspan="${textColCount}">Totals</td>${numericCells}<td></td></tr>`;
   }
 }
 
@@ -496,6 +559,115 @@ function onLotSortClick(key) {
     lotSortState = { key, dir: 'asc' };
   }
   renderLotResultsTable();
+}
+
+// ── Lot Results row-level View Lots ──
+// Unlike Pricing's Zone Breakdown (whose rows share one already-known Branch/Price Range), a
+// Lot Results row can span every branch/price range currently in scope, so this reads them
+// live from the filter panel rather than a pinned per-row value. Status is NOT forced to OPEN
+// here (unlike Pricing's patterns, which are inherently about unsold stock) — Lot Results
+// covers every status, so View Lots uses each row's own status. The row's own Lot Type is
+// already fixed by the GROUP BY that produced it, so an untouched Lot Type filter defaults to
+// exactly that value; explicitly checking/clearing options (including Clear All, to broaden
+// beyond this row) takes over from there, same as everywhere else the filter appears.
+async function loadLotResultRowLotsContent(btn, content) {
+  content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
+  try {
+    const checkedLotTypes = lotTypeFilterValues(btn.closest('tr'));
+    const lotType = checkedLotTypes.length ? checkedLotTypes : [btn.dataset.lotType];
+    const filters = {
+      materialType: [btn.dataset.materialType],
+      branch: lotFilters.branch.getValues(),
+      priceRange: lotFilters.priceRange.getValues(),
+      status: [btn.dataset.status],
+      lotType,
+    };
+    if (btn.dataset.zone !== undefined) filters.zone = [btn.dataset.zone];
+    if (btn.dataset.level !== undefined) filters.level = [btn.dataset.level];
+
+    const { rows, mode } = await fetchLotsDetail(filters);
+    const totalQty = computeDrillTotalQty(rows);
+    const zoneLabel = btn.dataset.zone !== undefined ? ` · Zone ${escapeHtml(btn.dataset.zone)}` : '';
+    const levelLabel = btn.dataset.level !== undefined ? ` · Level ${escapeHtml(btn.dataset.level)}` : '';
+    renderDrillDownPanel(content, {
+      rows, mode,
+      titleLine: `${escapeHtml(stripNVPrefix(btn.dataset.materialType))} (${fmt(totalQty)} units)${zoneLabel}${levelLabel} · ${escapeHtml(btn.dataset.status)}`,
+      filenameBase: `lot_results_${sanitizeForFilename(btn.dataset.materialType)}_${sanitizeForFilename(btn.dataset.lotType)}`,
+    });
+    content.dataset.loaded = 'true';
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[dashboard] loadLotResultRowLotsContent failed:', err);
+    content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
+  }
+}
+
+async function toggleLotResultLots(btn) {
+  const detailRow = btn.closest('tr')?.nextElementSibling;
+  if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
+  const isOpen = detailRow.style.display !== 'none';
+  if (isOpen) { detailRow.style.display = 'none'; btn.textContent = 'View Lots'; return; }
+
+  detailRow.style.display = '';
+  btn.textContent = 'Hide Lots';
+  const content = detailRow.querySelector('[data-drill-content]');
+  if (content.dataset.loaded === 'true') return;
+  await loadLotResultRowLotsContent(btn, content);
+}
+
+// Delegated listener for the Lot Results table's View Lots + Lot Type filter interactions —
+// mirrors initPricingTabEvents()'s equivalent block, scoped to this tab instead.
+function initLotResultsEvents() {
+  const panel = document.getElementById('tab-lots');
+  if (!panel) return;
+
+  panel.addEventListener('click', (e) => {
+    if (handleDrillDownPaginationOrExport(e)) return;
+
+    const viewLotsBtn = e.target.closest('button[data-action="toggle-lotresult-lots"]');
+    if (viewLotsBtn) { toggleLotResultLots(viewLotsBtn); return; }
+
+    const lotTypeCb = e.target.closest('[data-lot-type-filter] input[type="checkbox"]');
+    if (lotTypeCb) {
+      onLotTypeFilterChanged(lotTypeCb.closest('[data-lot-type-filter]'), {
+        buttonSelector: 'button[data-action="toggle-lotresult-lots"]',
+        loader: loadLotResultRowLotsContent,
+      });
+      return;
+    }
+
+    const lotTypeSelectAll = e.target.closest('[data-lot-type-select-all]');
+    if (lotTypeSelectAll) {
+      const details = lotTypeSelectAll.closest('[data-lot-type-filter]');
+      details.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = true; });
+      onLotTypeFilterChanged(details, {
+        buttonSelector: 'button[data-action="toggle-lotresult-lots"]',
+        loader: loadLotResultRowLotsContent,
+      });
+      return;
+    }
+
+    const lotTypeClearAll = e.target.closest('[data-lot-type-clear-all]');
+    if (lotTypeClearAll) {
+      const details = lotTypeClearAll.closest('[data-lot-type-filter]');
+      details.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+      onLotTypeFilterChanged(details, {
+        buttonSelector: 'button[data-action="toggle-lotresult-lots"]',
+        loader: loadLotResultRowLotsContent,
+      });
+      return;
+    }
+  });
+
+  // Lot Type options are fetched lazily on first open — <details>'s "toggle" event doesn't
+  // bubble, so this has to listen in the capture phase to catch it via delegation at all.
+  panel.addEventListener('toggle', (e) => {
+    const details = e.target.closest && e.target.closest('[data-lot-type-filter]');
+    if (details && details.open && details.dataset.loaded !== 'true') {
+      details.dataset.loaded = 'true';
+      loadLotTypeOptionsForDetails(details, lotFilters.branch.getValues());
+    }
+  }, true);
 }
 
 async function renderLotDrillDown() {
@@ -523,6 +695,8 @@ async function renderLotDrillDown() {
     branch: lotFilters.branch.getValues(),
     zone:   lotFilters.zone.getValues(),
     status: lotFilters.status.getValues(),
+    priceRange: lotFilters.priceRange.getValues(),
+    bigLotFilter: window.bigLotFilter,
   };
   if (mode === 'structured') {
     body.suiteNo = lotFilters.suiteNo.getValues();
@@ -1202,24 +1376,25 @@ function buildArrayQuery(paramsObj) {
     const list = Array.isArray(val) ? val : (val !== undefined && val !== null && val !== '' ? [val] : []);
     for (const v of list) qs.append(key, v);
   }
+  if (window.bigLotFilter && window.bigLotFilter !== 'all') qs.append('bigLotFilter', window.bigLotFilter);
   return qs.toString();
 }
 
-async function fetchLotFilters(branch) {
+async function fetchLotFilters(branch, materialType) {
   try {
-    const res = await fetch(`/api/lots/filters?${buildArrayQuery({ branch })}`);
-    if (!res.ok) return { materialTypes: [], branches: [] };
-    const { materialTypes, branches } = await res.json();
-    return { materialTypes: materialTypes || [], branches: branches || [] };
+    const res = await fetch(`/api/lots/filters?${buildArrayQuery({ branch, materialType })}`);
+    if (!res.ok) return { materialTypes: [], branches: [], priceRanges: [] };
+    const { materialTypes, branches, priceRanges } = await res.json();
+    return { materialTypes: materialTypes || [], branches: branches || [], priceRanges: priceRanges || [] };
   } catch (e) {
     console.error('[dashboard] fetchLotFilters failed:', e);
-    return { materialTypes: [], branches: [] };
+    return { materialTypes: [], branches: [], priceRanges: [] };
   }
 }
 
-async function fetchLotZones(branch, materialType) {
+async function fetchLotZones(branch, materialType, priceRange) {
   try {
-    const res = await fetch(`/api/lots/zones?${buildArrayQuery({ branch, materialType })}`);
+    const res = await fetch(`/api/lots/zones?${buildArrayQuery({ branch, materialType, priceRange })}`);
     if (!res.ok) return [];
     const { zones } = await res.json();
     return zones;
@@ -1229,9 +1404,9 @@ async function fetchLotZones(branch, materialType) {
   }
 }
 
-async function fetchLotSuites(branch, zone, materialType) {
+async function fetchLotSuites(branch, zone, materialType, priceRange) {
   try {
-    const res = await fetch(`/api/lots/suites?${buildArrayQuery({ branch, zone, materialType })}`);
+    const res = await fetch(`/api/lots/suites?${buildArrayQuery({ branch, zone, materialType, priceRange })}`);
     if (!res.ok) return { suites: [], statuses: [] };
     return await res.json();
   } catch (e) {
@@ -1240,9 +1415,9 @@ async function fetchLotSuites(branch, zone, materialType) {
   }
 }
 
-async function fetchLotSections(branch, zone, suiteNo, materialType) {
+async function fetchLotSections(branch, zone, suiteNo, materialType, priceRange) {
   try {
-    const res = await fetch(`/api/lots/sections?${buildArrayQuery({ branch, zone, suiteNo, materialType })}`);
+    const res = await fetch(`/api/lots/sections?${buildArrayQuery({ branch, zone, suiteNo, materialType, priceRange })}`);
     if (!res.ok) return { sections: [], statuses: [] };
     return await res.json();
   } catch (e) {
@@ -1251,9 +1426,9 @@ async function fetchLotSections(branch, zone, suiteNo, materialType) {
   }
 }
 
-async function fetchLotLevels(branch, zone, suiteNo, section, materialType) {
+async function fetchLotLevels(branch, zone, suiteNo, section, materialType, priceRange) {
   try {
-    const res = await fetch(`/api/lots/levels?${buildArrayQuery({ branch, zone, suiteNo, section, materialType })}`);
+    const res = await fetch(`/api/lots/levels?${buildArrayQuery({ branch, zone, suiteNo, section, materialType, priceRange })}`);
     if (!res.ok) return { levels: [], statuses: [] };
     return await res.json();
   } catch (e) {
@@ -1262,9 +1437,9 @@ async function fetchLotLevels(branch, zone, suiteNo, section, materialType) {
   }
 }
 
-async function fetchLotTypes(branch, zone, materialType) {
+async function fetchLotTypes(branch, zone, materialType, priceRange) {
   try {
-    const res = await fetch(`/api/lots/lotTypes?${buildArrayQuery({ branch, zone, materialType })}`);
+    const res = await fetch(`/api/lots/lotTypes?${buildArrayQuery({ branch, zone, materialType, priceRange })}`);
     if (!res.ok) return { lotTypes: [], statuses: [] };
     return await res.json();
   } catch (e) {
@@ -1287,25 +1462,42 @@ async function refreshLotLocationFields() {
 
   const branch = lotFilters.branch.getValues();
   const zone = lotFilters.zone.getValues();
+  const priceRange = lotFilters.priceRange.getValues();
 
   if (mode === 'structured') {
-    const { suites, statuses: suiteStatuses } = await fetchLotSuites(branch, zone, materialType);
+    const { suites, statuses: suiteStatuses } = await fetchLotSuites(branch, zone, materialType, priceRange);
     lotFilters.suiteNo.setOptions(suites);
 
     const suiteNo = lotFilters.suiteNo.getValues();
-    const { sections, statuses: sectionStatuses } = await fetchLotSections(branch, zone, suiteNo, materialType);
+    const { sections, statuses: sectionStatuses } = await fetchLotSections(branch, zone, suiteNo, materialType, priceRange);
     lotFilters.section.setOptions(sections);
 
     const section = lotFilters.section.getValues();
-    const { levels, statuses: levelStatuses } = await fetchLotLevels(branch, zone, suiteNo, section, materialType);
+    const { levels, statuses: levelStatuses } = await fetchLotLevels(branch, zone, suiteNo, section, materialType, priceRange);
     lotFilters.level.setOptions(levels);
 
     lotFilters.status.setOptions(levelStatuses.length ? levelStatuses : (sectionStatuses.length ? sectionStatuses : suiteStatuses));
   } else {
-    const { lotTypes, statuses } = await fetchLotTypes(branch, zone, materialType);
+    const { lotTypes, statuses } = await fetchLotTypes(branch, zone, materialType, priceRange);
     lotFilters.lotType.setOptions(lotTypes);
     lotFilters.status.setOptions(statuses);
   }
+}
+
+// Re-fetches Zone (a sibling of Price Range in the cascade — both scoped by branch + material
+// type only) and everything below it. Shared by refreshLotCascade (branch/product type change)
+// and Price Range's own onChange, so a Price Range change alone still narrows Zone downward.
+async function refreshLotZoneAndBelow() {
+  const branch = lotFilters.branch.getValues();
+  const materialType = lotFilters.materialType.getValues();
+  const mode = modeForSelection(materialType);
+  if (!mode) return;
+
+  const priceRange = lotFilters.priceRange.getValues();
+  const zones = await fetchLotZones(branch, materialType, priceRange);
+  lotFilters.zone.setOptions(zones);
+
+  await refreshLotLocationFields();
 }
 
 async function refreshLotCascade() {
@@ -1320,7 +1512,7 @@ async function refreshLotCascade() {
   const mode = modeForSelection(materialType);
   applyLotModeUI(mode);
 
-  const gated = [lotFilters.zone, lotFilters.suiteNo, lotFilters.section, lotFilters.level, lotFilters.lotType, lotFilters.status];
+  const gated = [lotFilters.priceRange, lotFilters.zone, lotFilters.suiteNo, lotFilters.section, lotFilters.level, lotFilters.lotType, lotFilters.status];
 
   if (!mode) {
     gated.forEach(f => { f.setOptions([]); f.setDisabled(true, 'Select product type first'); });
@@ -1330,10 +1522,12 @@ async function refreshLotCascade() {
   }
   gated.forEach(f => f.setDisabled(false));
 
-  const zones = await fetchLotZones(branch, materialType);
-  lotFilters.zone.setOptions(zones);
+  // Price Range is scoped by branch + material type only (a sibling of Zone, same
+  // dependency depth) — re-narrow it before deriving Zone and everything below.
+  const { priceRanges } = await fetchLotFilters(branch, materialType);
+  lotFilters.priceRange.setOptions(priceRanges);
 
-  await refreshLotLocationFields();
+  await refreshLotZoneAndBelow();
 }
 
 // Populates the "Branch Deep Dive" report dropdown (public/index.html #branchSelect).
@@ -1364,6 +1558,14 @@ function initLotFilters() {
   });
 
   const disabledGateText = 'Select product type first';
+
+  lotFilters.priceRange = new MultiSelect('lotPriceRange', {
+    placeholder: 'All price ranges',
+    disabledText: disabledGateText,
+    emptyText: 'No price ranges found',
+    onChange: refreshLotZoneAndBelow,
+  });
+  lotFilters.priceRange.setDisabled(true);
 
   lotFilters.zone = new MultiSelect('lotZone', {
     placeholder: 'All zones',
@@ -1445,6 +1647,7 @@ document.getElementById('matrixHeadRow')?.addEventListener('click', (e) => {
 });
 
 initLotFilters();
+initLotResultsEvents();
 
 window.renderLotDrillDown = renderLotDrillDown;
 window.exportLotsCSV = exportLotsCSV;
@@ -1541,7 +1744,7 @@ async function fetchLotsDetail(filters) {
   const res = await fetch('/api/lots', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...filters, detail: true }),
+    body: JSON.stringify({ ...filters, detail: true, bigLotFilter: window.bigLotFilter }),
   });
   if (res.status === 401 || res.redirected || res.url.includes('/login')) {
     throw new Error('SESSION_EXPIRED');
@@ -1701,6 +1904,33 @@ function exportDrillDownExcel(content) {
   XLSX.writeFile(wb, `${base}_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
+// Pagination + export are 100% generic (keyed off drillDownState via the clicked element's
+// nearest [data-drill-content] ancestor) — shared by every tab's delegated click listener
+// (Pricing's Zone Breakdown / Product Branch Breakdown View Lots, Lot Drill-Down's Lot
+// Results View Lots). Returns true if it handled the click, so callers can `if (...) return;`.
+function handleDrillDownPaginationOrExport(e) {
+  const pageBtn = e.target.closest('button[data-drill-page]');
+  if (pageBtn) {
+    const content = pageBtn.closest('[data-drill-content]');
+    const state = content && drillDownState.get(content.dataset.drillId);
+    if (state) {
+      const raw = pageBtn.dataset.drillPage;
+      state.pageSize = raw === 'all' ? 'all' : Number(raw);
+      renderDrillDownFromState(content);
+    }
+    return true;
+  }
+
+  const exportBtn = e.target.closest('button[data-drill-export]');
+  if (exportBtn) {
+    const content = exportBtn.closest('[data-drill-content]');
+    if (content) exportDrillDownExcel(content);
+    return true;
+  }
+
+  return false;
+}
+
 // Generic column-based sorter shared by the category tables and the aged-inventory table.
 function sortByKey(rows, sortState) {
   if (!sortState.key) return rows;
@@ -1718,7 +1948,7 @@ async function fetchPricingJSON(path, body) {
   const res = await fetch(`/api/pricing/${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
+    body: JSON.stringify({ ...(body || {}), bigLotFilter: window.bigLotFilter }),
   });
   if (res.status === 401 || res.redirected || res.url.includes('/login')) {
     throw new Error('SESSION_EXPIRED');
@@ -1752,6 +1982,11 @@ const pricingCategorySortState = {
 let agedSortState = { key: 'productType', dir: 'asc' };
 
 const pricingFiltersUI = {};
+// Price Range selects for the Overview/Summary KPIs (#1) and Product Type Summary (#2) —
+// each independently scopes its own section, both re-narrowed by Branch/Product Type the
+// same way Product Type is scoped by Branch, but neither participates in updatePricingGateState.
+let pricingOverviewPriceRangeUI = null;
+let pricingProductPriceRangeUI = null;
 
 async function refreshPricingCascade() {
   const branch = pricingFiltersUI.branch.getValues();
@@ -1762,6 +1997,21 @@ async function refreshPricingCascade() {
     console.error('[dashboard] refreshPricingCascade failed:', e);
   }
   updatePricingGateState();
+  await refreshPricingPriceRangeOptions();
+}
+
+// Re-narrows both Price Range selects to whatever's valid for the current Branch + Product
+// Type selection — called whenever either of those changes.
+async function refreshPricingPriceRangeOptions() {
+  const branch = pricingFiltersUI.branch.getValues();
+  const productType = pricingFiltersUI.productType.getValues();
+  try {
+    const { priceRanges } = await fetchPricingJSON('filters', { branch, productType });
+    pricingOverviewPriceRangeUI.setOptions(priceRanges || []);
+    pricingProductPriceRangeUI.setOptions(priceRanges || []);
+  } catch (e) {
+    console.error('[dashboard] refreshPricingPriceRangeOptions failed:', e);
+  }
 }
 
 // Branch + Product Type are required prerequisites for Min Stock + Search (which drive the
@@ -1794,7 +2044,19 @@ function initPricingFilters() {
   pricingFiltersUI.productType = new MultiSelect('pricingProductType', {
     placeholder: 'Select product type(s)',
     displayFn: stripNVPrefix,
-    onChange: updatePricingGateState,
+    onChange: () => { updatePricingGateState(); refreshPricingPriceRangeOptions(); },
+  });
+
+  // Empty selection == "All" (no filter) — unlike Branch/Product Type above, Price Range
+  // isn't a required gate, so it follows the same empty-means-All convention used everywhere
+  // else in the app rather than defaulting to every value checked.
+  pricingOverviewPriceRangeUI = new MultiSelect('pricingOverviewPriceRange', {
+    placeholder: 'All price ranges',
+    onChange: refreshPricingOverviewSection,
+  });
+  pricingProductPriceRangeUI = new MultiSelect('pricingProductPriceRange', {
+    placeholder: 'All price ranges',
+    onChange: refreshPricingProductSummarySection,
   });
 
   // Default both to every value selected (not empty) so the tab is immediately useful on
@@ -1802,9 +2064,11 @@ function initPricingFilters() {
   // sets state directly rather than going through selectAll()'s onChange, avoiding a redundant
   // cascade re-fetch while both filters are still being populated. Select All / Clear All stay
   // available afterward for narrowing down manually.
-  pricingFiltersReady = fetchPricingJSON('filters', {}).then(({ branches, productTypes }) => {
+  pricingFiltersReady = fetchPricingJSON('filters', {}).then(({ branches, productTypes, priceRanges }) => {
     pricingFiltersUI.branch.setOptions(branches || [], { selectAll: true });
     pricingFiltersUI.productType.setOptions(productTypes || [], { selectAll: true });
+    pricingOverviewPriceRangeUI.setOptions(priceRanges || []);
+    pricingProductPriceRangeUI.setOptions(priceRanges || []);
   }).catch(e => console.error('[dashboard] initPricingFilters failed:', e));
 
   updatePricingGateState();
@@ -1827,9 +2091,49 @@ function renderPricingOverviewKPIs(overview, quadrantRows) {
   set('kpi-pricingSweetSpot', fmt(counts.sweet_spot));
   set('kpi-pricingGems', fmt(counts.long_ignored_gem));
   set('kpi-pricingDeadStock', fmt(counts.dead_stock));
+}
 
-  lastPricingByProduct = overview.byProduct || [];
-  renderPricingProductSummaryTable(lastPricingByProduct);
+// Overview/Summary section (#1) — independent of Product Type Summary's (#2) own Price Range
+// filter below, and not gated on Branch/Product Type: both default to "All" already, so this
+// is always loadable. Recomputes the category counts via its own Quadrant fetch (scoped by
+// this section's Price Range) rather than reusing lastPricingQuadrant, which stays driven by
+// the shared Branch/Product Type/Min Stock filter for the Quadrant Chart + Category tables.
+async function refreshPricingOverviewSection() {
+  const branch = pricingFiltersUI.branch.getValues();
+  const productType = pricingFiltersUI.productType.getValues();
+  const priceRange = pricingOverviewPriceRangeUI.getValues();
+  const minStockInput = document.getElementById('pricingMinStock');
+  const minStock = Math.max(0, parseInt(minStockInput?.value, 10) || 100);
+  try {
+    const [overview, quadrantRes] = await Promise.all([
+      fetchPricingJSON('overview', { branch, productType, priceRange }),
+      fetchPricingJSON('quadrant', { branch, productType, minStock, priceRange }),
+    ]);
+    renderPricingOverviewKPIs(overview, quadrantRes.rows || []);
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[dashboard] refreshPricingOverviewSection failed:', err);
+  }
+}
+
+// Product Type Summary section (#2) — its own independent Price Range filter, scoping both
+// the top-level per-product totals here and the "+" branch breakdown (see
+// toggleProductBranchBreakdown, which reads pricingProductPriceRangeUI directly).
+async function refreshPricingProductSummarySection() {
+  const branch = pricingFiltersUI.branch.getValues();
+  const productType = pricingFiltersUI.productType.getValues();
+  const priceRange = pricingProductPriceRangeUI.getValues();
+  const tbody = document.querySelector('#pricingProductSummary tbody');
+  if (tbody) tbody.innerHTML = `<tr><td style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
+  try {
+    const overview = await fetchPricingJSON('overview', { branch, productType, priceRange });
+    lastPricingByProduct = overview.byProduct || [];
+    renderPricingProductSummaryTable(lastPricingByProduct);
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[dashboard] refreshPricingProductSummarySection failed:', err);
+    if (tbody) tbody.innerHTML = `<tr><td style="text-align:center;color:var(--red)">Error: ${err.message}</td></tr>`;
+  }
 }
 
 function renderPricingProductSummaryTable(rows) {
@@ -1858,21 +2162,28 @@ function renderPricingProductSummaryTable(rows) {
   }).join('');
 }
 
-// Shared by the Overview's Branch breakdown and the per-row Zone breakdown — both are small
-// fixed-sort (not user-sortable) aggregate tables, most-unsold-units-first by default, so
-// they answer "where is the unsold stock" at a glance without another header-click.
-function renderBreakdownTableHTML(rows, columns, sortKey, emptyMessage) {
-  if (!rows.length) return `<div class="drilldown-empty">${emptyMessage}</div>`;
-  const sorted = [...rows].sort((a, b) => b[sortKey] - a[sortKey]);
-  return `<table class="drilldown-table"><thead><tr>${
-    columns.map(c => `<th>${c.label}</th>`).join('')
-  }</tr></thead><tbody>${
-    sorted.map(r => `<tr>${columns.map(c => `<td>${c.render ? c.render(r) : (r[c.key] ?? '')}</td>`).join('')}</tr>`).join('')
-  }</tbody></table>`;
-}
-
-function renderProductBranchBreakdownHTML(rows) {
-  return renderBreakdownTableHTML(rows, PRODUCT_BREAKDOWN_COLUMNS, 'unsoldUnits', 'No unsold (OPEN) lots for this product.');
+// Third level of depth under Product Type Summary: "+" → Branch Breakdown → View Lots per
+// branch row → Lot Type filter → actual lots. Mirrors renderZoneBreakdownTableHTML's
+// accordion-row + nested accordion-detail structure exactly. Branch is a real single value
+// per row (grouped by Branch — see getProductBranchBreakdown), so it's baked into the row's
+// data attributes same as Zone Breakdown does; Price Range is NOT pinned per row (the whole
+// breakdown is already scoped by the Product Type Summary's own pricingProductPriceRangeUI
+// filter, which can hold 0+ values), so it's read live at fetch time instead — see
+// loadProductBranchLotsContent — rather than baked into a single-value data attribute.
+function renderProductBranchBreakdownHTML(rows, product) {
+  if (!rows.length) return `<div class="drilldown-empty">No unsold (OPEN) lots for this product.</div>`;
+  const sorted = [...rows].sort((a, b) => b.unsoldUnits - a.unsoldUnits);
+  const colCount = PRODUCT_BREAKDOWN_COLUMNS.length + 1;
+  const head = PRODUCT_BREAKDOWN_COLUMNS.map(c => `<th>${c.label}</th>`).join('') + '<th></th>';
+  const body = sorted.map(r => {
+    const cells = PRODUCT_BREAKDOWN_COLUMNS.map(c => `<td>${c.render ? c.render(r) : (r[c.key] ?? '')}</td>`).join('');
+    const lotTypeFilter = renderLotTypeFilterHTML({ product, branch: r.branch, priceRange: '' });
+    const viewLotsBtn = `<button type="button" class="btn-view-lots" data-action="toggle-productbranch-lots"
+      data-product="${escapeHtml(product)}" data-branch="${escapeHtml(r.branch)}">View Lots</button>`;
+    return `<tr class="accordion-row">${cells}<td><div class="row-actions">${lotTypeFilter}${viewLotsBtn}</div></td></tr>
+      <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>`;
+  }).join('');
+  return `<table class="drilldown-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 async function toggleProductBranchBreakdown(btn) {
@@ -1888,14 +2199,69 @@ async function toggleProductBranchBreakdown(btn) {
   if (content.dataset.loaded === 'true') return;
   content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
   try {
-    const { rows } = await fetchPricingJSON('product-branch-breakdown', { productType: [btn.dataset.product] });
-    content.innerHTML = renderProductBranchBreakdownHTML(rows || []);
+    const { rows } = await fetchPricingJSON('product-branch-breakdown', { productType: [btn.dataset.product], priceRange: pricingProductPriceRangeUI.getValues() });
+    content.innerHTML = renderProductBranchBreakdownHTML(rows || [], btn.dataset.product);
     content.dataset.loaded = 'true';
   } catch (err) {
     if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
     console.error('[dashboard] toggleProductBranchBreakdown failed:', err);
     content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
   }
+}
+
+// ── Branch-scoped View Lots (nested inside Product Branch Breakdown) ──
+// Same OPEN-only convention as Zone Breakdown's loadZoneLotsDrillDownContent (this whole
+// breakdown is inherently about unsold stock) — the one difference is Price Range, read live
+// from pricingProductPriceRangeUI rather than a per-row data attribute (see comment above
+// renderProductBranchBreakdownHTML).
+async function loadProductBranchLotsContent(btn, content) {
+  content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
+  try {
+    const lotType = lotTypeFilterValues(btn.closest('tr'));
+    const filters = {
+      materialType: [btn.dataset.product],
+      branch: [btn.dataset.branch],
+      priceRange: pricingProductPriceRangeUI.getValues(),
+      status: ['OPEN'],
+      lotType,
+    };
+    const { rows, mode } = await fetchLotsDetail(filters);
+    const totalQty = computeDrillTotalQty(rows);
+    renderDrillDownPanel(content, {
+      rows, mode,
+      titleLine: `${escapeHtml(stripNVPrefix(btn.dataset.product))} (${fmt(totalQty)} units) · ${escapeHtml(btn.dataset.branch)} — Branch Breakdown — Unsold Lots`,
+      filenameBase: `pricing_lots_branchbreakdown_${sanitizeForFilename(btn.dataset.product)}_${sanitizeForFilename(btn.dataset.branch)}`,
+    });
+    content.dataset.loaded = 'true';
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[dashboard] loadProductBranchLotsContent failed:', err);
+    content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
+  }
+}
+
+async function toggleProductBranchLots(btn) {
+  const detailRow = btn.closest('tr')?.nextElementSibling;
+  if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
+  const isOpen = detailRow.style.display !== 'none';
+  if (isOpen) { detailRow.style.display = 'none'; btn.textContent = 'View Lots'; return; }
+
+  detailRow.style.display = '';
+  btn.textContent = 'Hide Lots';
+  const content = detailRow.querySelector('[data-drill-content]');
+  if (content.dataset.loaded === 'true') return;
+  await loadProductBranchLotsContent(btn, content);
+}
+
+// Resolves which View Lots button + loader a given [data-lot-type-filter]'s row uses — #tab-pricing
+// now has two: Zone Breakdown rows (toggle-zone-lots) and Product Branch Breakdown rows
+// (toggle-productbranch-lots) — so the shared checkbox/select-all/clear-all handlers below
+// can't assume just one.
+function pricingLotTypeFilterOptionsFor(row) {
+  if (row?.querySelector('button[data-action="toggle-productbranch-lots"]')) {
+    return { buttonSelector: 'button[data-action="toggle-productbranch-lots"]', loader: loadProductBranchLotsContent };
+  }
+  return { buttonSelector: 'button[data-action="toggle-zone-lots"]', loader: loadZoneLotsDrillDownContent };
 }
 
 // ── Zone Breakdown (Aged Inventory + all 4 category tables) ──
@@ -1992,10 +2358,13 @@ function renderLotTypeOptionsHTML(lotTypes) {
     <div class="lot-type-options">${opts}</div>`;
 }
 
-async function loadLotTypeOptionsForDetails(details) {
+// fallbackBranch lets a second call site (Lot Drill-Down's Lot Results rows, which have no
+// single pinned Branch) supply its own live branch selection instead of Pricing's
+// pricingFilters.branch — defaults to the original Pricing-tab behavior when omitted.
+async function loadLotTypeOptionsForDetails(details, fallbackBranch = pricingFilters.branch) {
   const panel = details.querySelector('[data-lot-type-panel]');
   if (!panel) return;
-  const branch = details.dataset.branch !== undefined ? [details.dataset.branch] : pricingFilters.branch;
+  const branch = details.dataset.branch !== undefined ? [details.dataset.branch] : fallbackBranch;
   const zone = details.dataset.zone !== undefined ? [details.dataset.zone] : undefined;
   try {
     const qs = buildArrayQuery({ materialType: [details.dataset.product], priceRange: [details.dataset.priceRange], branch, zone });
@@ -2022,9 +2391,11 @@ function updateLotTypeFilterSummary(details) {
     : `Lot Type: ${checked.length} selected`;
 }
 
-// Checking/unchecking a Lot Type option invalidates the zone row's View Lots cache; if the
-// panel is currently open it's refetched in place (not closed) so the narrowed list appears live.
-function onLotTypeFilterChanged(details) {
+// Checking/unchecking a Lot Type option invalidates the row's View Lots cache; if the panel
+// is currently open it's refetched in place (not closed) so the narrowed list appears live.
+// buttonSelector/loader let a second call site (Lot Drill-Down's Lot Results rows) plug in
+// its own View Lots button + loader — defaults to the original Zone Breakdown behavior.
+function onLotTypeFilterChanged(details, { buttonSelector = 'button[data-action="toggle-zone-lots"]', loader = loadZoneLotsDrillDownContent } = {}) {
   updateLotTypeFilterSummary(details);
   const row = details.closest('tr');
   const detailRow = row?.nextElementSibling;
@@ -2032,9 +2403,9 @@ function onLotTypeFilterChanged(details) {
   if (!content) return;
   content.dataset.loaded = 'false';
   if (detailRow.style.display === 'none') return;
-  const viewLotsBtn = row.querySelector('button[data-action="toggle-zone-lots"]');
+  const viewLotsBtn = row.querySelector(buttonSelector);
   if (!viewLotsBtn) return;
-  loadZoneLotsDrillDownContent(viewLotsBtn, content);
+  loader(viewLotsBtn, content);
 }
 
 function renderPricingQuadrantChart(rows) {
@@ -2234,16 +2605,19 @@ async function renderPricingIntelligence() {
   const agedTbody = document.querySelector('#tableAgedInventory tbody');
   if (agedTbody) agedTbody.innerHTML = `<tr><td style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
 
+  // Overview/Summary (#1) and Product Type Summary (#2) each run independently, scoped by
+  // their own Price Range filter rather than anything fetched below.
+  refreshPricingOverviewSection();
+  refreshPricingProductSummarySection();
+
   try {
-    const [overview, quadrantRes, agedRes] = await Promise.all([
-      fetchPricingJSON('overview', { branch, productType }),
+    const [quadrantRes, agedRes] = await Promise.all([
       fetchPricingJSON('quadrant', { branch, productType, minStock }),
       fetchPricingJSON('aged-inventory', { branch, productType }),
     ]);
     lastPricingQuadrant = quadrantRes.rows || [];
     lastPricingAged = agedRes.rows || [];
 
-    renderPricingOverviewKPIs(overview, lastPricingQuadrant);
     renderPricingQuadrantChart(lastPricingQuadrant);
     renderPricingCategoryTables(lastPricingQuadrant);
     renderAgedInventoryTable(lastPricingAged);
@@ -2597,6 +2971,9 @@ function initPricingTabEvents() {
     const zoneLotsBtn = e.target.closest('button[data-action="toggle-zone-lots"]');
     if (zoneLotsBtn) { toggleZoneLotsDrillDown(zoneLotsBtn); return; }
 
+    const productBranchLotsBtn = e.target.closest('button[data-action="toggle-productbranch-lots"]');
+    if (productBranchLotsBtn) { toggleProductBranchLots(productBranchLotsBtn); return; }
+
     const breakdownBtn = e.target.closest('button[data-action="toggle-product-breakdown"]');
     if (breakdownBtn) { toggleProductBranchBreakdown(breakdownBtn); return; }
 
@@ -2612,13 +2989,17 @@ function initPricingTabEvents() {
     }
 
     const lotTypeCb = e.target.closest('[data-lot-type-filter] input[type="checkbox"]');
-    if (lotTypeCb) { onLotTypeFilterChanged(lotTypeCb.closest('[data-lot-type-filter]')); return; }
+    if (lotTypeCb) {
+      const details = lotTypeCb.closest('[data-lot-type-filter]');
+      onLotTypeFilterChanged(details, pricingLotTypeFilterOptionsFor(details.closest('tr')));
+      return;
+    }
 
     const lotTypeSelectAll = e.target.closest('[data-lot-type-select-all]');
     if (lotTypeSelectAll) {
       const details = lotTypeSelectAll.closest('[data-lot-type-filter]');
       details.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = true; });
-      onLotTypeFilterChanged(details);
+      onLotTypeFilterChanged(details, pricingLotTypeFilterOptionsFor(details.closest('tr')));
       return;
     }
 
@@ -2626,28 +3007,11 @@ function initPricingTabEvents() {
     if (lotTypeClearAll) {
       const details = lotTypeClearAll.closest('[data-lot-type-filter]');
       details.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
-      onLotTypeFilterChanged(details);
+      onLotTypeFilterChanged(details, pricingLotTypeFilterOptionsFor(details.closest('tr')));
       return;
     }
 
-    const pageBtn = e.target.closest('button[data-drill-page]');
-    if (pageBtn) {
-      const content = pageBtn.closest('[data-drill-content]');
-      const state = content && drillDownState.get(content.dataset.drillId);
-      if (state) {
-        const raw = pageBtn.dataset.drillPage;
-        state.pageSize = raw === 'all' ? 'all' : Number(raw);
-        renderDrillDownFromState(content);
-      }
-      return;
-    }
-
-    const exportBtn = e.target.closest('button[data-drill-export]');
-    if (exportBtn) {
-      const content = exportBtn.closest('[data-drill-content]');
-      if (content) exportDrillDownExcel(content);
-      return;
-    }
+    if (handleDrillDownPaginationOrExport(e)) return;
   });
 
   // Lot Type options are fetched lazily on first open — <details>'s "toggle" event doesn't
@@ -2702,7 +3066,8 @@ function showSessionExpired() {
 // ── Bootstrap ──
 async function initDashboard() {
   try {
-    const res = await fetch('/api/data');
+    const qs = window.bigLotFilter && window.bigLotFilter !== 'all' ? `?bigLotFilter=${window.bigLotFilter}` : '';
+    const res = await fetch(`/api/data${qs}`);
     if (res.status === 401 || res.redirected || res.url.includes('/login')) {
       showSessionExpired();
       return;

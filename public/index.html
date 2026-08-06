@@ -32,6 +32,15 @@
       </div>
       <div class="nav-right">
         <span class="ytd-badge" id="ytdBadge">YTD —</span>
+        <div class="biglot-control">
+          <label class="biglot-label" for="bigLotFilterSelect">Lot Size</label>
+          <select id="bigLotFilterSelect" class="biglot-select" onchange="onBigLotFilterChange()">
+            <option value="all">All Lots</option>
+            <option value="exclude">Exclude Big Lots (&lt;500K)</option>
+            <option value="only">Big Lots Only (&ge;500K)</option>
+          </select>
+        </div>
+        <span class="biglot-badge" id="bigLotBadge" hidden></span>
         <button class="btn-logout" onclick="logout()">Logout</button>
       </div>
     </div>
@@ -47,6 +56,7 @@
     <button class="tab" data-tab="lots">Lot Drill-Down</button>
     <button class="tab" data-tab="pricing">Pricing Intelligence</button>
     <button class="tab" data-tab="velocity">Sales Velocity</button>
+    <button class="tab" data-tab="lifecycle">Product Lifecycle</button>
   </div>
 
   <main class="main-content">
@@ -259,6 +269,10 @@
             <label class="lot-filter-label" for="lotMaterialType">Product Type</label>
             <div class="ms" id="lotMaterialType"></div>
           </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="lotPriceRange">Price Range</label>
+            <div class="ms" id="lotPriceRange"></div>
+          </div>
           <div class="lot-filter-field" id="fieldZone">
             <label class="lot-filter-label" for="lotZone">Zone</label>
             <div class="ms" id="lotZone"></div>
@@ -347,6 +361,18 @@
     <!-- ── TAB: Pricing Intelligence ── -->
     <section class="tab-panel" id="tab-pricing">
 
+      <!-- Overview/Summary filter -->
+      <div class="table-card">
+        <h3 class="table-title">Overview Filter</h3>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="pricingOverviewPriceRange">Price Range</label>
+            <div class="ms" id="pricingOverviewPriceRange"></div>
+          </div>
+        </div>
+        <p class="lot-filter-help">Scopes the KPI cards below only — independent of the Branch/Product Type filter further down the page.</p>
+      </div>
+
       <!-- KPI Cards -->
       <div class="kpi-grid">
         <div class="kpi-card">
@@ -378,13 +404,19 @@
       <!-- Product Type Summary (Overview) -->
       <div class="table-card">
         <h3 class="table-title">Product Type Summary</h3>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="pricingProductPriceRange">Price Range</label>
+            <div class="ms" id="pricingProductPriceRange"></div>
+          </div>
+        </div>
         <div class="table-scroll">
           <table id="pricingProductSummary">
             <thead><tr id="pricingProductSummaryHead"></tr></thead>
             <tbody><tr><td style="text-align:center;color:var(--muted)">Loading…</td></tr></tbody>
           </table>
         </div>
-        <p class="lot-filter-help">Click "+" to see a Branch-level breakdown of unsold (OPEN) lots for that product.</p>
+        <p class="lot-filter-help">Click "+" to see a Branch-level breakdown of unsold (OPEN) lots for that product. Price Range filter above applies to both.</p>
       </div>
 
       <!-- Filters -->
@@ -703,11 +735,134 @@
       </div>
     </section>
 
+    <!-- ── TAB: Product Lifecycle ── -->
+    <section class="tab-panel" id="tab-lifecycle">
+      <div class="table-card">
+        <h3 class="table-title">Filters</h3>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="lifecycleBranch">Branch</label>
+            <div class="ms" id="lifecycleBranch"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="lifecycleProductType">Product Type</label>
+            <div class="ms" id="lifecycleProductType"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="lifecycleLevel">Level</label>
+            <div class="ms" id="lifecycleLevel"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="lifecycleAgeMonths">New / Aging Threshold</label>
+            <div class="subtab-bar" id="lifecycleAgeToggle">
+              <button type="button" class="subtab" data-age-months="1">1 mo</button>
+              <button type="button" class="subtab" data-age-months="3">3 mo</button>
+              <button type="button" class="subtab active" data-age-months="6">6 mo</button>
+              <button type="button" class="subtab" data-age-months="12">12 mo</button>
+            </div>
+          </div>
+          <button class="btn-report" id="btnLifecycleSearch" onclick="renderProductLifecycle()">
+            <span>&#128269;</span> Search
+          </button>
+        </div>
+        <p class="lot-filter-help">The global Lot Size filter (header) applies automatically to every section below.</p>
+      </div>
+
+      <!-- Section 1: New vs Aging Overview -->
+      <div class="kpi-grid">
+        <div class="kpi-card kpi-card--hero">
+          <div class="kpi-value" id="kpi-lifecycleAgingBalanceValue">—</div>
+          <div class="kpi-label">Aging Balance Value — Clearance Burden</div>
+        </div>
+        <div class="kpi-card kpi-card--red">
+          <div class="kpi-value kpi-value--sm" id="kpi-lifecycleAgingUnits">—</div>
+          <div class="kpi-label">Aging Units</div>
+        </div>
+        <div class="kpi-card kpi-card--amber">
+          <div class="kpi-value" id="kpi-lifecyclePctAging">—</div>
+          <div class="kpi-label">% of Total Balance Aging</div>
+        </div>
+        <div class="kpi-card kpi-card--green">
+          <div class="kpi-value kpi-value--sm" id="kpi-lifecycleNewBalanceValue">—</div>
+          <div class="kpi-label">New Balance Value</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-value kpi-value--sm" id="kpi-lifecycleNewUnits">—</div>
+          <div class="kpi-label">New Units</div>
+        </div>
+        <div class="kpi-card accent">
+          <div class="kpi-value" id="kpi-lifecycleNewSellThrough">—</div>
+          <div class="kpi-label">New Sell-Through % (so far)</div>
+        </div>
+      </div>
+
+      <!-- Section 2: Lifecycle Curve -->
+      <div class="chart-card chart-card--wide">
+        <h3 class="chart-title">Lifecycle Curve — Cumulative Sell-Through % by Months Since Launch</h3>
+        <div class="chart-wrap chart-wrap--velocity">
+          <canvas id="chartLifecycleCurve"></canvas>
+        </div>
+        <p class="lot-filter-help">One line per cohort (Branch + Product Type + Level + launch quarter) — the
+          largest cohorts by unit count, narrowed by the filters above. Split by Branch/Product Type/Level using
+          those same filters to focus the chart on fewer cohorts.</p>
+        <div class="chart-empty-state" id="lifecycleCurveEmpty" style="display:none;">Click Search to load cohorts.</div>
+      </div>
+
+      <!-- Section 3: Cohort Table -->
+      <div class="table-card">
+        <h3 class="table-title">Cohort Table</h3>
+        <div class="drilldown-toolbar" id="lifecycleCohortsToolbar"></div>
+        <div class="table-scroll">
+          <table id="tableLifecycleCohorts">
+            <thead><tr id="lifecycleCohortsHeadRow"></tr></thead>
+            <tbody id="lifecycleCohortsBody">
+              <tr><td style="text-align:center;color:var(--muted)">Click Search to load cohorts.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="report-btns" style="margin-top:0.75rem;">
+          <button class="btn-report" onclick="exportLifecycleCohortsExcel()">
+            <span>&#11015;</span> Export to Excel
+          </button>
+        </div>
+        <p class="lot-filter-help">Click "View Lots" on a row to drill into that cohort's individual unsold (OPEN)
+          lots, with a Lot Type filter scoped to that cohort. Status Flag: New = too young to judge yet, Steady =
+          selling at a consistent pace, Slowing = momentum fading, Stagnant = essentially stalled, Sold Out = fully
+          cleared.</p>
+      </div>
+
+      <!-- Section 4: Agent Focus Snapshot -->
+      <div class="table-card">
+        <h3 class="table-title">Agent Focus Snapshot</h3>
+        <div class="kpi-grid">
+          <div class="kpi-card accent">
+            <div class="kpi-value" id="kpi-lifecycleNewComboCount">—</div>
+            <div class="kpi-label">New Product Choices</div>
+          </div>
+          <div class="kpi-card kpi-card--green">
+            <div class="kpi-value" id="kpi-lifecycleNewComboSellThrough">—</div>
+            <div class="kpi-label">New Avg Sell-Through %</div>
+          </div>
+          <div class="kpi-card kpi-card--red">
+            <div class="kpi-value" id="kpi-lifecycleAgingComboCount">—</div>
+            <div class="kpi-label">Aging Product Choices</div>
+          </div>
+          <div class="kpi-card kpi-card--amber">
+            <div class="kpi-value" id="kpi-lifecycleAgingComboSellThrough">—</div>
+            <div class="kpi-label">Aging Avg Sell-Through %</div>
+          </div>
+        </div>
+        <p class="lot-filter-help">Snapshot comparison of currently active product/level combinations — not a
+          historical trend, since only current lot status is available.</p>
+      </div>
+    </section>
+
   </main>
 
   <script src="/js/dashboard.js"></script>
   <script src="/js/query.js"></script>
   <script src="/js/velocity.js"></script>
+  <script src="/js/lifecycle.js"></script>
 
   <script>
     // Tab switching
@@ -719,6 +874,7 @@
         document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
         if (btn.dataset.tab === 'pricing' && typeof onPricingTabActivated === 'function') onPricingTabActivated();
         if (btn.dataset.tab === 'velocity' && typeof onVelocityTabActivated === 'function') onVelocityTabActivated();
+        if (btn.dataset.tab === 'lifecycle' && typeof onLifecycleTabActivated === 'function') onLifecycleTabActivated();
       });
     });
 

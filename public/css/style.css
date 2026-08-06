@@ -105,6 +105,41 @@ body {
   background: rgba(255,255,255,0.1);
   border-color: rgba(255,255,255,0.6);
 }
+.biglot-control {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.biglot-label {
+  font-size: 0.7rem;
+  color: rgba(255,255,255,0.65);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+.biglot-select {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.3);
+  color: var(--white);
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.biglot-select option {
+  color: var(--text);
+  background: var(--white);
+}
+.biglot-badge {
+  background: rgba(239,159,39,0.18);
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  border-radius: 20px;
+  padding: 0.25rem 0.8rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
 
 /* ── Tab Bar ── */
 .tab-bar {
@@ -204,6 +239,20 @@ body {
 .kpi-card--green { border-left-color: var(--green); }
 .kpi-card--amber { border-left-color: var(--amber); }
 .kpi-card--red   { border-left-color: var(--red); }
+
+/* Visually prominent variant for the one KPI that's the core metric of its section (e.g.
+   Product Lifecycle's Aging Balance Value — the inventory-clearance "burden" figure). */
+.kpi-card--hero {
+  grid-column: span 2;
+  border-left-width: 6px;
+  border-left-color: var(--red);
+  background: linear-gradient(135deg, rgba(226,75,74,0.08), var(--white) 60%);
+}
+.kpi-card--hero .kpi-value {
+  font-size: 2.3rem;
+  color: var(--red);
+}
+.kpi-card--hero .kpi-label { color: var(--red); }
 
 .kpi-value {
   font-size: 1.75rem;
@@ -377,6 +426,7 @@ tbody td {
 .badge--red    { background: #fef0f0; color: var(--red); }
 .badge--amber  { background: #fef8ec; color: var(--amber); }
 .badge--navy   { background: #eef2ff; color: var(--navy); }
+.badge--grey   { background: #f1f2f4; color: var(--muted); }
 
 /* ── BD Focus Summary note ── */
 .bd-summary {
@@ -1378,6 +1428,9 @@ tr.drill-group-lottype td {
   .nav-title { font-size: 0.82rem; }
   .nav-sub { display: none; }
   .ytd-badge { font-size: 0.68rem; padding: 0.2rem 0.5rem; }
+  .biglot-label { display: none; }
+  .biglot-select { font-size: 0.7rem; padding: 0.25rem 0.4rem; }
+  .biglot-badge { display: none; }
   .tab { padding: 0 0.875rem; font-size: 0.8rem; }
   .chat-window { min-height: 280px; max-height: 380px; }
   .query-layout { max-width: 100%; }

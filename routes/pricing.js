@@ -22,11 +22,39 @@ function toArray(val) {
 // them everywhere pricing analysis groups by Price Range.
 const REAL_PRICE_RANGE = `"Price Range" IS NOT NULL AND TRIM("Price Range") != '' AND TRIM("Price Range") != 'false'`;
 
+// Sorts Price Range labels (e.g. "≥500k", "<100k") by actual price magnitude, descending —
+// the raw DB/alphabetical order reads meaninglessly (e.g. "<100k" sorts before "<10k"). Ties
+// at the same magnitude (e.g. "≥100k" vs "<100k") put "≥" before "<", so the dropdown reads
+// as one continuous scale from the top tier down.
+function sortPriceRangesDesc(list) {
+  const parse = (s) => {
+    const m = String(s).match(/([<≥])\s*([\d.]+)\s*(k|m)?/i);
+    if (!m) return { magnitude: -Infinity, isGte: false };
+    let magnitude = parseFloat(m[2]);
+    const unit = (m[3] || '').toLowerCase();
+    if (unit === 'k') magnitude *= 1_000;
+    else if (unit === 'm') magnitude *= 1_000_000;
+    return { magnitude, isGte: m[1] === '≥' };
+  };
+  return [...list].sort((a, b) => {
+    const pa = parse(a), pb = parse(b);
+    if (pa.magnitude !== pb.magnitude) return pb.magnitude - pa.magnitude;
+    return (pb.isGte ? 1 : 0) - (pa.isGte ? 1 : 0);
+  });
+}
+
 const FILTER_COLUMNS = {
   branch:      'Branch',
   productType: 'Material Type Desc.',
   priceRange:  'Price Range',
 };
+
+// "Big Lot" = Unit Price >= 500,000 MYR, matching the existing "≥500k" Price Range tier.
+function bigLotClause(bigLotFilter) {
+  if (bigLotFilter === 'exclude') return `"Unit Price" < 500000`;
+  if (bigLotFilter === 'only') return `"Unit Price" >= 500000`;
+  return null;
+}
 
 // Every filter accepts either a single value or an array — empty/missing means "All" (no filter).
 function buildWhere(filters) {
@@ -42,6 +70,8 @@ function buildWhere(filters) {
       params.push(...list);
     }
   }
+  const bigLot = bigLotClause(filters.bigLotFilter);
+  if (bigLot) clauses.push(bigLot);
   return { clauses, params };
 }
 
@@ -149,8 +179,8 @@ export function getPricingOverview(filters = {}) {
 // sums, but Sell-through % still comes from the full stock/sold ratio across all statuses,
 // same historical-performance convention used everywhere else (see getPricingQuadrant).
 export function getProductBranchBreakdown(filters = {}) {
-  const { productType } = filters;
-  const { where, params } = whereClause({ productType });
+  const { productType, priceRange, bigLotFilter } = filters;
+  const { where, params } = whereClause({ productType, priceRange, bigLotFilter });
 
   return getDb().prepare(`
     SELECT
@@ -177,12 +207,12 @@ export function getProductBranchBreakdown(filters = {}) {
 // Aged Inventory's rows (which can span several branches) out into one row per Branch+Zone —
 // what lets each zone row's own View Lots drill down to an exact single Branch.
 export function getZoneBreakdown(filters = {}) {
-  const { branch, productType, priceRange, minAgeDays } = filters;
+  const { branch, productType, priceRange, minAgeDays, bigLotFilter } = filters;
   const extra = [REAL_PRICE_RANGE];
   if (minAgeDays !== undefined && minAgeDays !== null && minAgeDays !== '') {
     extra.push(`${AGE_DAYS_EXPR} > ${Number(minAgeDays)}`);
   }
-  const { where, params } = whereClause({ branch, productType, priceRange }, extra);
+  const { where, params } = whereClause({ branch, productType, priceRange, bigLotFilter }, extra);
 
   return getDb().prepare(`
     SELECT
@@ -202,8 +232,8 @@ export function getZoneBreakdown(filters = {}) {
 }
 
 export function getPricingQuadrant(filters = {}) {
-  const { branch, productType, minStock = 100 } = filters;
-  const { where, params } = whereClause({ branch, productType }, [REAL_PRICE_RANGE]);
+  const { branch, productType, minStock = 100, priceRange, bigLotFilter } = filters;
+  const { where, params } = whereClause({ branch, productType, priceRange, bigLotFilter }, [REAL_PRICE_RANGE]);
 
   const groups = getDb().prepare(`
     SELECT
@@ -259,9 +289,9 @@ export function getPricingQuadrant(filters = {}) {
 }
 
 export function getAgedInventory(filters = {}) {
-  const { branch, productType, priceRange } = filters;
+  const { branch, productType, priceRange, bigLotFilter } = filters;
   const { where, params } = whereClause(
-    { branch, productType, priceRange },
+    { branch, productType, priceRange, bigLotFilter },
     [`UPPER(TRIM("Status")) = 'OPEN'`, REAL_PRICE_RANGE]
   );
 
@@ -326,7 +356,7 @@ function mergePivotAgg(list) {
 }
 
 export function getPricingPivot(body = {}) {
-  const { rowDimension, colDimension, metric, branch, productType } = body;
+  const { rowDimension, colDimension, metric, branch, productType, bigLotFilter } = body;
   const rowCol = PIVOT_DIMENSIONS[rowDimension];
   const colCol = PIVOT_DIMENSIONS[colDimension];
   if (!rowCol || !colCol) throw new Error(`Invalid rowDimension or colDimension`);
@@ -339,7 +369,7 @@ export function getPricingPivot(body = {}) {
   ];
   if (rowDimension === 'Price Range' || colDimension === 'Price Range') extra.push(REAL_PRICE_RANGE);
 
-  const { where, params } = whereClause({ branch, productType }, extra);
+  const { where, params } = whereClause({ branch, productType, bigLotFilter }, extra);
 
   const raw = getDb().prepare(`
     SELECT
@@ -370,15 +400,16 @@ export function getPricingPivot(body = {}) {
 }
 
 export function getPricingFilters(filters = {}) {
-  const { branch, productType } = filters;
+  const { branch, productType, bigLotFilter } = filters;
 
-  const branches = distinctColumn('Branch', '', []);
+  const { where: branchWhere, params: branchParams } = whereClause({ bigLotFilter });
+  const branches = distinctColumn('Branch', branchWhere, branchParams);
 
-  const { where: productWhere, params: productParams } = whereClause({ branch });
+  const { where: productWhere, params: productParams } = whereClause({ branch, bigLotFilter });
   const productTypes = distinctColumn('Material Type Desc.', productWhere, productParams);
 
-  const { where: rangeWhere, params: rangeParams } = whereClause({ branch, productType });
-  const priceRanges = distinctColumn('Price Range', rangeWhere, rangeParams, `TRIM("Price Range") != 'false'`);
+  const { where: rangeWhere, params: rangeParams } = whereClause({ branch, productType, bigLotFilter });
+  const priceRanges = sortPriceRangesDesc(distinctColumn('Price Range', rangeWhere, rangeParams, `TRIM("Price Range") != 'false'`));
 
   return { branches, productTypes, priceRanges };
 }

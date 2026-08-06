@@ -58,7 +58,22 @@ export function refreshCache() {
   rowCache = null;
 }
 
-export function getOverview() {
+// "Big Lot" = Unit Price >= 500,000 MYR, matching the existing "≥500k" Price Range tier.
+function bigLotClause(bigLotFilter) {
+  if (bigLotFilter === 'exclude') return `"Unit Price" < 500000`;
+  if (bigLotFilter === 'only') return `"Unit Price" >= 500000`;
+  return null;
+}
+
+function bigLotWhere(filters = {}, extra = []) {
+  const clauses = [...extra];
+  const clause = bigLotClause(filters.bigLotFilter);
+  if (clause) clauses.push(clause);
+  return clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+}
+
+export function getOverview(filters = {}) {
+  const where = bigLotWhere(filters);
   const row = getDb().prepare(`
     SELECT
       SUM("Total Stock Case")     AS totalStock,
@@ -66,6 +81,7 @@ export function getOverview() {
       SUM("Total Balance Case")   AS totalBalance,
       SUM("Total Balance Amount") AS totalValue
     FROM master_stock
+    ${where}
   `).get();
   const { totalStock, totalSold, totalBalance, totalValue } = row;
   const sellThrough = totalStock > 0 ? (totalSold / totalStock) * 100 : 0;
@@ -81,7 +97,8 @@ export function getBranches() {
   `).all().map(r => r.branch);
 }
 
-export function getBranchSummary() {
+export function getBranchSummary(filters = {}) {
+  const where = bigLotWhere(filters);
   const rows = getDb().prepare(`
     SELECT
       COALESCE(TRIM("Branch"), 'Unknown') AS branch,
@@ -90,6 +107,7 @@ export function getBranchSummary() {
       SUM("Total Balance Case")   AS totalBalance,
       SUM("Total Balance Amount") AS totalValue
     FROM master_stock
+    ${where}
     GROUP BY TRIM("Branch")
   `).all();
   return rows.map(r => ({
@@ -98,7 +116,8 @@ export function getBranchSummary() {
   })).sort((a, b) => b.sellThrough - a.sellThrough);
 }
 
-export function getProductSummary() {
+export function getProductSummary(filters = {}) {
+  const where = bigLotWhere(filters);
   const rows = getDb().prepare(`
     SELECT
       COALESCE(TRIM("Material Type Desc."), 'Unknown') AS product,
@@ -107,6 +126,7 @@ export function getProductSummary() {
       SUM("Total Balance Case")   AS totalBalance,
       SUM("Total Balance Amount") AS totalValue
     FROM master_stock
+    ${where}
     GROUP BY TRIM("Material Type Desc.")
   `).all();
   return rows.map(r => ({
@@ -115,7 +135,8 @@ export function getProductSummary() {
   })).sort((a, b) => b.sellThrough - a.sellThrough);
 }
 
-export function getBDFocusSummary() {
+export function getBDFocusSummary(filters = {}) {
+  const where = bigLotWhere(filters, [`LOWER(TRIM("BD Focus Zone")) = 'yes'`]);
   const rows = getDb().prepare(`
     SELECT
       COALESCE(TRIM("Branch"), 'Unknown') AS branch,
@@ -123,7 +144,7 @@ export function getBDFocusSummary() {
       SUM("Total Balance Amount") AS totalValue,
       COUNT(*)                    AS count
     FROM master_stock
-    WHERE LOWER(TRIM("BD Focus Zone")) = 'yes'
+    ${where}
     GROUP BY TRIM("Branch")
   `).all();
   return rows.map(r => ({
@@ -136,7 +157,8 @@ export function getBDFocusSummary() {
   })).sort((a, b) => b.totalBalance - a.totalBalance);
 }
 
-export function getStatusBreakdown() {
+export function getStatusBreakdown(filters = {}) {
+  const where = bigLotWhere(filters);
   const rows = getDb().prepare(`
     SELECT
       COALESCE(UPPER(TRIM("Status")), 'UNKNOWN') AS status,
@@ -144,12 +166,14 @@ export function getStatusBreakdown() {
       SUM("Total Balance Case")   AS totalBalance,
       SUM("Total Balance Amount") AS totalValue
     FROM master_stock
+    ${where}
     GROUP BY UPPER(TRIM("Status"))
   `).all();
   return rows.sort((a, b) => b.count - a.count);
 }
 
-export function getPriceRangeSummary() {
+export function getPriceRangeSummary(filters = {}) {
+  const where = bigLotWhere(filters);
   const rows = getDb().prepare(`
     SELECT
       COALESCE(TRIM("Price Range"), 'Unknown') AS priceRange,
@@ -158,6 +182,7 @@ export function getPriceRangeSummary() {
       SUM("Total Balance Case")   AS totalBalance,
       SUM("Total Balance Amount") AS totalValue
     FROM master_stock
+    ${where}
     GROUP BY TRIM("Price Range")
   `).all();
   return rows.map(r => ({
@@ -166,7 +191,8 @@ export function getPriceRangeSummary() {
   })).sort((a, b) => b.sellThrough - a.sellThrough);
 }
 
-export function getLotTypeSummary() {
+export function getLotTypeSummary(filters = {}) {
+  const where = bigLotWhere(filters);
   const rows = getDb().prepare(`
     SELECT
       COALESCE(TRIM("Lot Type"), 'Unknown') AS lotType,
@@ -175,6 +201,7 @@ export function getLotTypeSummary() {
       SUM("Total Balance Case")   AS totalBalance,
       SUM("Total Balance Amount") AS totalValue
     FROM master_stock
+    ${where}
     GROUP BY TRIM("Lot Type")
   `).all();
   return rows.map(r => ({
@@ -183,7 +210,12 @@ export function getLotTypeSummary() {
   })).sort((a, b) => b.sellThrough - a.sellThrough);
 }
 
-export function getAgedStock() {
+export function getAgedStock(filters = {}) {
+  const where = bigLotWhere(filters, [
+    `UPPER(TRIM("Status")) = 'OPEN'`,
+    `"Lot Create On" IS NOT NULL`,
+    `"Lot Create On" != ''`,
+  ]);
   const rows = getDb().prepare(`
     SELECT
       TRIM("Branch")              AS branch,
@@ -193,9 +225,7 @@ export function getAgedStock() {
       "Total Balance Amount"      AS value,
       "Lot Create On"             AS lotCreatedOn
     FROM master_stock
-    WHERE UPPER(TRIM("Status")) = 'OPEN'
-      AND "Lot Create On" IS NOT NULL
-      AND "Lot Create On" != ''
+    ${where}
   `).all();
 
   const now = new Date();
@@ -217,7 +247,8 @@ export function getAgedStock() {
   }).sort((a, b) => b.agedays - a.agedays);
 }
 
-export function getBranchProductMatrix() {
+export function getBranchProductMatrix(filters = {}) {
+  const where = bigLotWhere(filters);
   const rows = getDb().prepare(`
     SELECT
       COALESCE(TRIM("Branch"), 'Unknown')              AS branch,
@@ -225,6 +256,7 @@ export function getBranchProductMatrix() {
       SUM("Total Stock Case") AS totalStock,
       SUM("Total Sold Case")  AS totalSold
     FROM master_stock
+    ${where}
     GROUP BY TRIM("Branch"), TRIM("Material Type Desc.")
   `).all();
 
