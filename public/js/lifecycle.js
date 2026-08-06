@@ -30,6 +30,27 @@ const LIFECYCLE_STATUS_FLAG_CARD_CLASS = {
   Stagnant: 'status-flag-card--red', 'Sold Out': 'status-flag-card--grey',
 };
 
+// Peer Benchmark (item 3): a second, independent summary/filter dimension alongside Status
+// Flag — same card-summary/filter/badge machinery, just its own state and color mapping.
+let lastLifecyclePeerComparisonSummary = [];
+const LIFECYCLE_PEER_COMPARISONS = ['Above Peers', 'On Par', 'Below Peers', 'Insufficient Data'];
+const LIFECYCLE_PEER_COMPARISON_CARD_CLASS = {
+  'Above Peers': 'status-flag-card--green', 'On Par': 'status-flag-card--grey',
+  'Below Peers': 'status-flag-card--red', 'Insufficient Data': 'status-flag-card--lightgrey',
+};
+const LIFECYCLE_PEER_COMPARISON_BADGE_CLASS = {
+  'Above Peers': 'badge--green', 'On Par': 'badge--grey',
+  'Below Peers': 'badge--red', 'Insufficient Data': 'badge--lightgrey',
+};
+
+// Suite No is meaningfully populated (>50%) for only NV Niche (68.3%) and NV Baby Paradise
+// (100%) — routes/lifecycle.js's SUITE_GROUPED_TYPES promotes those into the cohort key itself
+// (each row already IS a Zone+Suite combination), so their "+" skips straight to Level
+// Breakdown. NV Pedestal (32.2%) and NV Pet Niche (19.3%) stay Zone-only cohorts but still
+// offer Suite Breakdown as a drill-down step; NV EBL (~0%) gets neither.
+const LIFECYCLE_SUITE_GROUPED_TYPES = ['NV Niche', 'NV Baby Paradise'];
+const LIFECYCLE_SUITE_BREAKDOWN_TYPES = ['NV Pedestal', 'NV Pet Niche'];
+
 async function fetchLifecycleJSON(path, body) {
   const res = await fetch(`/api/lifecycle/${path}`, {
     method: 'POST',
@@ -50,21 +71,22 @@ function getLifecycleFilterValues() {
   return {
     branch:      lifecycleFiltersUI.branch.getValues(),
     productType: lifecycleFiltersUI.productType.getValues(),
-    level:       lifecycleFiltersUI.level.getValues(),
     ageMonths:   lifecycleAgeMonths,
   };
 }
 
-// Level is scoped by Branch + Product Type only (no Zone/Suite/Section in this tab's filter
-// set) — a flat 3-field cascade, all three defaulting to "All" selected on load (see
-// initLifecycleFilters), consistent with Pricing Intelligence's own default-to-All.
+// A flat 2-field cascade (Branch -> Product Type), both defaulting to "All" selected on load
+// (see initLifecycleFilters), consistent with Pricing Intelligence's own default-to-All. Level
+// used to be a third field here, but it's now purely a drill-down detail (Level Breakdown / a
+// Cohort Table row's own Suite No column — see item 2 of the restructuring), never a top-level
+// filter — keeping one here would be stale and misleading now that cohorts group by Zone (or
+// Zone+Suite), not Level.
 async function refreshLifecycleCascade() {
   const filters = getLifecycleFilterValues();
   try {
     const result = await fetchLifecycleJSON('filters', filters);
     lifecycleFiltersUI.branch.setOptions(result.branches || []);
     lifecycleFiltersUI.productType.setOptions(result.productTypes || []);
-    lifecycleFiltersUI.level.setOptions(result.levels || []);
   } catch (e) {
     console.error('[lifecycle] refreshLifecycleCascade failed:', e);
   }
@@ -80,10 +102,6 @@ function initLifecycleFilters() {
     displayFn: stripNVPrefix,
     onChange: refreshLifecycleCascade,
   });
-  lifecycleFiltersUI.level = new MultiSelect('lifecycleLevel', {
-    placeholder: 'All levels',
-    onChange: refreshLifecycleCascade,
-  });
 
   const ageToggle = document.getElementById('lifecycleAgeToggle');
   ageToggle?.addEventListener('click', (e) => {
@@ -96,10 +114,9 @@ function initLifecycleFilters() {
 
   // Default every value selected (not empty) so the tab is immediately useful on open —
   // matches Pricing Intelligence's initPricingFilters() exactly.
-  lifecycleFiltersReady = fetchLifecycleJSON('filters', {}).then(({ branches, productTypes, levels }) => {
+  lifecycleFiltersReady = fetchLifecycleJSON('filters', {}).then(({ branches, productTypes }) => {
     lifecycleFiltersUI.branch.setOptions(branches || [], { selectAll: true });
     lifecycleFiltersUI.productType.setOptions(productTypes || [], { selectAll: true });
-    lifecycleFiltersUI.level.setOptions(levels || [], { selectAll: true });
   }).catch(e => console.error('[lifecycle] initLifecycleFilters failed:', e));
 }
 
@@ -129,8 +146,15 @@ function initLifecycleCohortFilters() {
     placeholder: 'All status flags',
     onChange: renderLifecycleCohortSection,
   });
-  // Status Flag is a fixed enum, not DB-driven — set once, no fetch/cascade needed.
+  // Status Flag and Peer Comparison are both fixed enums, not DB-driven — set once, no
+  // fetch/cascade needed.
   cohortFiltersUI.statusFlag.setOptions(LIFECYCLE_STATUS_FLAGS, { selectAll: true });
+
+  cohortFiltersUI.peerComparison = new MultiSelect('cohortPeerComparison', {
+    placeholder: 'All peer comparisons',
+    onChange: renderLifecycleCohortSection,
+  });
+  cohortFiltersUI.peerComparison.setOptions(LIFECYCLE_PEER_COMPARISONS, { selectAll: true });
 
   lifecycleCohortFiltersReady = fetchLifecycleJSON('filters', {}).then(({ branches, productTypes }) => {
     cohortFiltersUI.branch.setOptions(branches || [], { selectAll: true });
@@ -358,6 +382,7 @@ const LIFECYCLE_COHORT_COLUMNS = [
   { key: 'branch',                label: 'Branch',         type: 'text' },
   { key: 'productType',           label: 'Product Type',   type: 'text',   render: r => stripNVPrefix(r.productType) },
   { key: 'zone',                  label: 'Zone',            type: 'text' },
+  { key: 'suiteNo',               label: 'Suite No',        type: 'text',   render: r => r.suiteNo || '—' },
   { key: 'cohortPeriod',          label: 'Cohort Period',   type: 'text' },
   { key: 'ageMonthsNow',          label: 'Age (months)',    type: 'number', render: r => fmt(r.ageMonthsNow) },
   { key: 'totalUnits',            label: 'Total Units',     type: 'number', render: r => fmt(r.totalUnits) },
@@ -366,6 +391,7 @@ const LIFECYCLE_COHORT_COLUMNS = [
   { key: 'avgPrice',              label: 'Avg Price',       type: 'number', render: r => myr(r.avgPrice) },
   { key: 'overallSellThroughPct', label: 'Sell-Through %',  type: 'number', render: r => pct(r.overallSellThroughPct) },
   { key: 'statusFlag',            label: 'Status Flag',     type: 'text',   render: r => `<span class="badge ${lifecycleStatusBadgeClass(r.statusFlag)}">${r.statusFlag}</span>` },
+  { key: 'peerComparison',        label: 'Peer Benchmark',  type: 'text',   render: r => `<span class="badge ${lifecyclePeerComparisonBadgeClass(r.peerComparison)}" title="${r.peerBenchmarkPct !== null ? `Peers: ${pct(r.peerBenchmarkPct)}` : 'Fewer than 3 comparable peer cohorts'}">${r.peerComparison}</span>` },
 ];
 
 function lifecycleStatusBadgeClass(flag) {
@@ -373,6 +399,10 @@ function lifecycleStatusBadgeClass(flag) {
     New: 'badge--blue', Steady: 'badge--green', Slowing: 'badge--amber',
     Stagnant: 'badge--red', 'Sold Out': 'badge--grey',
   }[flag] || 'badge--navy';
+}
+
+function lifecyclePeerComparisonBadgeClass(peerComparison) {
+  return LIFECYCLE_PEER_COMPARISON_BADGE_CLASS[peerComparison] || 'badge--navy';
 }
 
 function renderLifecycleCohortsHead() {
@@ -423,24 +453,50 @@ function renderLifecycleCohortsBody() {
   tbody.innerHTML = rows.map(r => {
     const cells = LIFECYCLE_COHORT_COLUMNS.map(col => `<td>${col.render ? col.render(r) : (r[col.key] ?? '')}</td>`).join('');
     const lotTypeFilter = renderLotTypeFilterHTML({ product: r.productType, branch: r.branch, priceRange: '', zone: r.zone });
+
+    // r.suiteGrouped rows (NV Niche / NV Baby Paradise) already have Suite No baked into their
+    // own identity (see LIFECYCLE_SUITE_GROUPED_TYPES / routes/lifecycle.js's
+    // buildCohortsFromRows) — both View Lots and the "+" expand scope straight to that exact
+    // Zone+Suite (r.suiteNo may be '', the "no Suite No data" bucket — still a real, precise
+    // scope, just an empty-string sentinel routes/lifecycle.js and routes/lots.js both
+    // special-case as "blank Suite No" rather than "no Suite No filter at all").
+    const suiteNoAttr = r.suiteGrouped ? ` data-suite-no="${escapeHtml(r.suiteNo ?? '')}"` : '';
     const viewLotsBtn = `<button type="button" class="btn-view-lots" data-action="toggle-lifecycle-lots"
       data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}"
-      data-zone="${escapeHtml(r.zone)}" data-cohort-period="${escapeHtml(r.cohortPeriod)}">View Lots</button>`;
+      data-zone="${escapeHtml(r.zone)}" data-cohort-period="${escapeHtml(r.cohortPeriod)}"${suiteNoAttr}>View Lots</button>`;
 
-    // Level is only a meaningful drill-down for structured product types (flat land has no
-    // Level No values to break down) — matches STRUCTURED_MATERIAL_TYPES (dashboard.js), the
-    // same list the rest of the app uses to classify a Material Type as structured vs. flat.
+    // Level/Suite breakdowns are only meaningful for structured product types (flat land has no
+    // Level No/Suite No values to break down) — matches STRUCTURED_MATERIAL_TYPES (dashboard.js),
+    // the same list the rest of the app uses to classify a Material Type as structured vs. flat.
+    // Three shapes: (1) r.suiteGrouped rows skip straight to Level Breakdown, scoped to their
+    // own Zone+Suite (no separate Suite Breakdown step — Suite No is already the row's own
+    // identity); (2) LIFECYCLE_SUITE_BREAKDOWN_TYPES (Pedestal/Pet Niche) get Suite Breakdown as
+    // the first "+" step, with Level Breakdown nested one level deeper inside each suite row
+    // (see renderLifecycleSuiteBreakdownHTML); (3) NV EBL (~0% Suite No) and any other
+    // structured type go straight to an unscoped, whole-zone Level Breakdown.
     const isStructured = STRUCTURED_MATERIAL_TYPES.includes(r.productType);
-    const levelBtn = isStructured ? `<button type="button" class="btn-expand" data-action="toggle-lifecycle-level-breakdown"
-      data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}"
-      data-zone="${escapeHtml(r.zone)}" data-cohort-period="${escapeHtml(r.cohortPeriod)}" aria-label="Level breakdown">+</button>` : '';
-    const levelDetailRow = isStructured
-      ? `<tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-level-breakdown-content></div></td></tr>`
-      : '';
+    let expandBtn = '';
+    let expandDetailRow = '';
+    if (r.suiteGrouped) {
+      expandBtn = `<button type="button" class="btn-expand" data-action="toggle-lifecycle-level-breakdown"
+        data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}"
+        data-zone="${escapeHtml(r.zone)}" data-cohort-period="${escapeHtml(r.cohortPeriod)}"${suiteNoAttr} aria-label="Level breakdown">+</button>`;
+      expandDetailRow = `<tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-level-breakdown-content></div></td></tr>`;
+    } else if (LIFECYCLE_SUITE_BREAKDOWN_TYPES.includes(r.productType)) {
+      expandBtn = `<button type="button" class="btn-expand" data-action="toggle-lifecycle-suite-breakdown"
+        data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}"
+        data-zone="${escapeHtml(r.zone)}" data-cohort-period="${escapeHtml(r.cohortPeriod)}" aria-label="Suite breakdown">+</button>`;
+      expandDetailRow = `<tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-suite-breakdown-content></div></td></tr>`;
+    } else if (isStructured) {
+      expandBtn = `<button type="button" class="btn-expand" data-action="toggle-lifecycle-level-breakdown"
+        data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}"
+        data-zone="${escapeHtml(r.zone)}" data-cohort-period="${escapeHtml(r.cohortPeriod)}" aria-label="Level breakdown">+</button>`;
+      expandDetailRow = `<tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-level-breakdown-content></div></td></tr>`;
+    }
 
-    return `<tr class="accordion-row">${cells}<td><div class="row-actions">${lotTypeFilter}${viewLotsBtn}${levelBtn}</div></td></tr>
+    return `<tr class="accordion-row">${cells}<td><div class="row-actions">${lotTypeFilter}${viewLotsBtn}${expandBtn}</div></td></tr>
       <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>
-      ${levelDetailRow}`;
+      ${expandDetailRow}`;
   }).join('');
 }
 
@@ -473,20 +529,51 @@ function renderLifecycleStatusFlagCards() {
   el.innerHTML = cards + clearBtn;
 }
 
+// Peer Comparison summary cards — same shape as the Status Flag ones (item 3's "4th dimension"
+// ask), computed by the backend from whatever the Status Flag filter has already narrowed to
+// (so the two summary rows read as a consistent pair) but before the Peer Comparison filter
+// itself, so all 4 cards always show real numbers regardless of which value is selected.
+function renderLifecyclePeerComparisonCards() {
+  const el = document.getElementById('lifecyclePeerComparisonCards');
+  if (!el || !cohortFiltersUI.peerComparison) return;
+  const activeValues = cohortFiltersUI.peerComparison.getValues();
+  const activeValue = activeValues.length === 1 ? activeValues[0] : null;
+
+  const cards = LIFECYCLE_PEER_COMPARISONS.map(pc => {
+    const stat = lastLifecyclePeerComparisonSummary.find(s => s.peerComparison === pc) || { count: 0, balanceValue: 0 };
+    const colorCls = LIFECYCLE_PEER_COMPARISON_CARD_CLASS[pc];
+    const activeCls = activeValue === pc ? ' status-flag-card--active' : '';
+    return `<button type="button" class="status-flag-card ${colorCls}${activeCls}" data-peer-comparison-card="${escapeHtml(pc)}">
+      <div class="status-flag-card-count">${fmt(stat.count)}</div>
+      <div class="status-flag-card-label">${escapeHtml(pc)}</div>
+      <div class="status-flag-card-value">${myr(stat.balanceValue)}</div>
+    </button>`;
+  }).join('');
+
+  const isCleared = activeValues.length === 0 || activeValues.length === LIFECYCLE_PEER_COMPARISONS.length;
+  const clearBtn = `<button type="button" class="status-flag-clear-btn${isCleared ? ' status-flag-clear-btn--active' : ''}" data-peer-comparison-clear>
+    Clear<span class="status-flag-clear-sub">Show All</span></button>`;
+
+  el.innerHTML = cards + clearBtn;
+}
+
 async function renderLifecycleCohortSection() {
   const filters = {
     branch: cohortFiltersUI.branch.getValues(),
     productType: cohortFiltersUI.productType.getValues(),
     statusFlag: cohortFiltersUI.statusFlag.getValues(),
+    peerComparison: cohortFiltersUI.peerComparison.getValues(),
     ageMonths: lifecycleAgeMonths,
   };
   const tbody = document.getElementById('lifecycleCohortsBody');
   if (tbody) tbody.innerHTML = `<tr><td style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
   try {
-    const { rows, statusFlagSummary } = await fetchLifecycleJSON('cohort-table', filters);
+    const { rows, statusFlagSummary, peerComparisonSummary } = await fetchLifecycleJSON('cohort-table', filters);
     lastLifecycleCohortRows = rows || [];
     lastLifecycleStatusFlagSummary = statusFlagSummary || [];
+    lastLifecyclePeerComparisonSummary = peerComparisonSummary || [];
     renderLifecycleStatusFlagCards();
+    renderLifecyclePeerComparisonCards();
     renderLifecycleCohortsHead();
     renderLifecycleCohortsBody();
   } catch (err) {
@@ -520,11 +607,15 @@ async function loadLifecycleCohortLotsContent(btn, content) {
       status: ['OPEN'],
       lotType,
     };
+    // Present (possibly '') only for suiteGrouped cohorts — see renderLifecycleCohortsBody —
+    // so this stays exactly the row's own scope rather than the whole zone across every suite.
+    if (btn.dataset.suiteNo !== undefined) filters.suiteNo = [btn.dataset.suiteNo];
     const { rows, mode } = await fetchLotsDetail(filters);
     const totalQty = computeDrillTotalQty(rows);
+    const suiteLabel = btn.dataset.suiteNo !== undefined ? ` · Suite ${escapeHtml(btn.dataset.suiteNo || '(none)')}` : '';
     renderDrillDownPanel(content, {
       rows, mode,
-      titleLine: `${escapeHtml(stripNVPrefix(btn.dataset.product))} (${fmt(totalQty)} units) · ${escapeHtml(btn.dataset.branch)} · Zone ${escapeHtml(btn.dataset.zone)} · ${escapeHtml(btn.dataset.cohortPeriod)} — Unsold Lots`,
+      titleLine: `${escapeHtml(stripNVPrefix(btn.dataset.product))} (${fmt(totalQty)} units) · ${escapeHtml(btn.dataset.branch)} · Zone ${escapeHtml(btn.dataset.zone)}${suiteLabel} · ${escapeHtml(btn.dataset.cohortPeriod)} — Unsold Lots`,
       filenameBase: `lifecycle_lots_${sanitizeForFilename(btn.dataset.product)}_${sanitizeForFilename(btn.dataset.branch)}_${sanitizeForFilename(btn.dataset.cohortPeriod)}`,
     });
     content.dataset.loaded = 'true';
@@ -535,9 +626,11 @@ async function loadLifecycleCohortLotsContent(btn, content) {
   }
 }
 
-// Level Breakdown — the Cohort Table row's "+" expand (structured product types only). Scoped
-// to this row's exact Branch+ProductType+Zone+CohortPeriod, same grain its own View Lots
-// drills into, just aggregated by Level instead of listing individual lots.
+// Level Breakdown — reached either directly from a Cohort Table row's "+" (NV EBL, which has
+// no Suite No data — see hasSuiteBreakdown above) or nested one level deeper inside a Suite
+// Breakdown row (every other structured type). Scoped to the exact Branch+ProductType+Zone+
+// CohortPeriod, same grain View Lots drills into, plus an optional Suite No when reached via a
+// suite row rather than the whole zone — just aggregated by Level instead of listing lots.
 const LIFECYCLE_LEVEL_BREAKDOWN_COLUMNS = [
   { key: 'level',         label: 'Level',          render: r => r.level },
   { key: 'totalUnits',    label: 'Units',          render: r => fmt(r.totalUnits) },
@@ -554,15 +647,20 @@ function renderLifecycleLevelBreakdownHTML(rows) {
   return `<table class="drilldown-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
+// btn.dataset.suiteNo is only present when this was reached via a Suite Breakdown row's own "+"
+// (see renderLifecycleSuiteBreakdownHTML) — absent for the direct EBL "+" and for the "whole
+// zone" fallback button, both of which want the unscoped, all-suites level breakdown.
 async function loadLifecycleLevelBreakdownContent(btn, content) {
   content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
   try {
-    const { rows } = await fetchLifecycleJSON('level-breakdown', {
+    const filters = {
       branch: [btn.dataset.branch],
       productType: [btn.dataset.product],
       zone: [btn.dataset.zone],
       cohortPeriod: btn.dataset.cohortPeriod,
-    });
+    };
+    if (btn.dataset.suiteNo !== undefined) filters.suiteNo = [btn.dataset.suiteNo];
+    const { rows } = await fetchLifecycleJSON('level-breakdown', filters);
     content.innerHTML = renderLifecycleLevelBreakdownHTML(rows || []);
     content.dataset.loaded = 'true';
   } catch (err) {
@@ -575,7 +673,7 @@ async function loadLifecycleLevelBreakdownContent(btn, content) {
 // The Level Breakdown detail row is always the SECOND accordion-detail sibling after the main
 // row (View Lots' detail row is always the first — see renderLifecycleCohortsBody), so this
 // hops one sibling further than toggleLifecycleCohortLots. Only reachable via the "+" button,
-// which only renders for structured rows that actually have this second row.
+// which only renders directly on the Cohort Table row for NV EBL (no Suite Breakdown step).
 async function toggleLifecycleLevelBreakdown(btn) {
   const detailRow = btn.closest('tr')?.nextElementSibling?.nextElementSibling;
   if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
@@ -587,6 +685,105 @@ async function toggleLifecycleLevelBreakdown(btn) {
   btn.setAttribute('aria-label', 'Hide level breakdown');
   const content = detailRow.querySelector('[data-level-breakdown-content]');
   if (content.dataset.loaded === 'true') return;
+  await loadLifecycleLevelBreakdownContent(btn, content);
+}
+
+// Suite Breakdown — the Cohort Table row's "+" expand for structured types other than NV EBL
+// (see hasSuiteBreakdown). Each suite row gets its own nested "+" leading to a Level Breakdown
+// scoped to that exact Zone+Suite combination — same nested-accordion-within-a-rendered-
+// subtable shape as dashboard.js's Zone Breakdown -> View Lots nesting.
+const LIFECYCLE_SUITE_BREAKDOWN_COLUMNS = [
+  { key: 'suiteNo',       label: 'Suite No',       render: r => r.suiteNo },
+  { key: 'totalUnits',    label: 'Units',          render: r => fmt(r.totalUnits) },
+  { key: 'balanceUnits',  label: 'Balance Units',  render: r => fmt(r.balanceUnits) },
+  { key: 'balanceValue',  label: 'Balance Value',  render: r => myr(r.balanceValue) },
+  { key: 'sellThroughPct', label: 'Sell-Through %', render: r => pct(r.sellThroughPct) },
+];
+
+// Some zone-cohorts of a partially-populated structured type (Pedestal/Pet Niche especially)
+// have zero populated Suite No rows even though the product type as a whole has some — the
+// fallback button lets the user still reach a (whole-zone, unscoped) Level Breakdown instead of
+// dead-ending here.
+function renderLifecycleSuiteBreakdownHTML(rows, ctx) {
+  if (!rows.length) {
+    return `<div class="drilldown-empty">No Suite No data for this zone-cohort.
+      <button type="button" class="btn-view-lots" data-action="toggle-lifecycle-suite-fallback-levels"
+        data-product="${escapeHtml(ctx.product)}" data-branch="${escapeHtml(ctx.branch)}"
+        data-zone="${escapeHtml(ctx.zone)}" data-cohort-period="${escapeHtml(ctx.cohortPeriod)}">Show Level Breakdown for whole zone</button>
+    </div>`;
+  }
+  const colCount = LIFECYCLE_SUITE_BREAKDOWN_COLUMNS.length + 1;
+  const head = LIFECYCLE_SUITE_BREAKDOWN_COLUMNS.map(c => `<th>${c.label}</th>`).join('') + '<th></th>';
+  const body = rows.map(r => {
+    const cells = LIFECYCLE_SUITE_BREAKDOWN_COLUMNS.map(c => `<td>${c.render(r)}</td>`).join('');
+    const levelBtn = `<button type="button" class="btn-expand" data-action="toggle-lifecycle-suite-level-breakdown"
+      data-product="${escapeHtml(ctx.product)}" data-branch="${escapeHtml(ctx.branch)}"
+      data-zone="${escapeHtml(ctx.zone)}" data-cohort-period="${escapeHtml(ctx.cohortPeriod)}"
+      data-suite-no="${escapeHtml(r.suiteNo)}" aria-label="Level breakdown">+</button>`;
+    return `<tr class="accordion-row">${cells}<td>${levelBtn}</td></tr>
+      <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-level-breakdown-content></div></td></tr>`;
+  }).join('');
+  return `<table class="drilldown-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+async function loadLifecycleSuiteBreakdownContent(btn, content) {
+  content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
+  try {
+    const { rows } = await fetchLifecycleJSON('suite-breakdown', {
+      branch: [btn.dataset.branch],
+      productType: [btn.dataset.product],
+      zone: [btn.dataset.zone],
+      cohortPeriod: btn.dataset.cohortPeriod,
+    });
+    const ctx = { product: btn.dataset.product, branch: btn.dataset.branch, zone: btn.dataset.zone, cohortPeriod: btn.dataset.cohortPeriod };
+    content.innerHTML = renderLifecycleSuiteBreakdownHTML(rows || [], ctx);
+    content.dataset.loaded = 'true';
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[lifecycle] loadLifecycleSuiteBreakdownContent failed:', err);
+    content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
+  }
+}
+
+// Top-level Cohort Table "+" for Suite Breakdown — same double-hop-sibling shape as
+// toggleLifecycleLevelBreakdown (it occupies the same second-detail-row slot, just for the
+// product types that get a Suite step instead of going straight to Level).
+async function toggleLifecycleSuiteBreakdown(btn) {
+  const detailRow = btn.closest('tr')?.nextElementSibling?.nextElementSibling;
+  if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
+  const isOpen = detailRow.style.display !== 'none';
+  if (isOpen) { detailRow.style.display = 'none'; btn.textContent = '+'; btn.setAttribute('aria-label', 'Suite breakdown'); return; }
+
+  detailRow.style.display = '';
+  btn.textContent = '−';
+  btn.setAttribute('aria-label', 'Hide suite breakdown');
+  const content = detailRow.querySelector('[data-suite-breakdown-content]');
+  if (content.dataset.loaded === 'true') return;
+  await loadLifecycleSuiteBreakdownContent(btn, content);
+}
+
+// Nested inside a rendered Suite Breakdown row — a plain single-sibling toggle since it's
+// freshly-rendered local content, same as Zone Breakdown's nested View Lots toggle.
+async function toggleLifecycleSuiteLevelBreakdown(btn) {
+  const detailRow = btn.closest('tr')?.nextElementSibling;
+  if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
+  const isOpen = detailRow.style.display !== 'none';
+  if (isOpen) { detailRow.style.display = 'none'; btn.textContent = '+'; btn.setAttribute('aria-label', 'Level breakdown'); return; }
+
+  detailRow.style.display = '';
+  btn.textContent = '−';
+  btn.setAttribute('aria-label', 'Hide level breakdown');
+  const content = detailRow.querySelector('[data-level-breakdown-content]');
+  if (content.dataset.loaded === 'true') return;
+  await loadLifecycleLevelBreakdownContent(btn, content);
+}
+
+// The "Show Level Breakdown for whole zone" fallback (empty Suite Breakdown case) replaces the
+// Suite Breakdown panel's own content in place with the unscoped Level Breakdown — no extra
+// accordion nesting needed since the panel is already open.
+async function showLifecycleWholeZoneLevelBreakdown(btn) {
+  const content = btn.closest('[data-suite-breakdown-content]');
+  if (!content) return;
   await loadLifecycleLevelBreakdownContent(btn, content);
 }
 
@@ -607,12 +804,13 @@ function exportLifecycleCohortsExcel() {
   if (!lastLifecycleCohortRows.length) { alert('No data to export. Run a search first.'); return; }
   if (typeof XLSX === 'undefined') { alert('Excel export library failed to load — check your connection and try again.'); return; }
 
-  const header = LIFECYCLE_COHORT_COLUMNS.map(c => c.label);
+  const header = [...LIFECYCLE_COHORT_COLUMNS.map(c => c.label), 'Peer Benchmark %'];
   const sorted = sortByKey(lastLifecycleCohortRows, lifecycleCohortSortState);
   const aoa = [header, ...sorted.map(r => [
-    r.branch, stripNVPrefix(r.productType), r.zone, r.cohortPeriod, r.ageMonthsNow,
+    r.branch, stripNVPrefix(r.productType), r.zone, r.suiteNo || '', r.cohortPeriod, r.ageMonthsNow,
     r.totalUnits, r.balanceUnits, Number(r.balanceValue.toFixed(2)), Number(r.avgPrice.toFixed(2)),
-    Number(r.overallSellThroughPct.toFixed(1)), r.statusFlag,
+    Number(r.overallSellThroughPct.toFixed(1)), r.statusFlag, r.peerComparison,
+    r.peerBenchmarkPct !== null ? Number(r.peerBenchmarkPct.toFixed(1)) : '',
   ])];
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -673,6 +871,15 @@ function initLifecycleTabEvents() {
     const levelBreakdownBtn = e.target.closest('button[data-action="toggle-lifecycle-level-breakdown"]');
     if (levelBreakdownBtn) { toggleLifecycleLevelBreakdown(levelBreakdownBtn); return; }
 
+    const suiteBreakdownBtn = e.target.closest('button[data-action="toggle-lifecycle-suite-breakdown"]');
+    if (suiteBreakdownBtn) { toggleLifecycleSuiteBreakdown(suiteBreakdownBtn); return; }
+
+    const suiteLevelBreakdownBtn = e.target.closest('button[data-action="toggle-lifecycle-suite-level-breakdown"]');
+    if (suiteLevelBreakdownBtn) { toggleLifecycleSuiteLevelBreakdown(suiteLevelBreakdownBtn); return; }
+
+    const suiteFallbackLevelsBtn = e.target.closest('button[data-action="toggle-lifecycle-suite-fallback-levels"]');
+    if (suiteFallbackLevelsBtn) { showLifecycleWholeZoneLevelBreakdown(suiteFallbackLevelsBtn); return; }
+
     const statusFlagCardBtn = e.target.closest('button[data-status-flag-card]');
     if (statusFlagCardBtn) {
       cohortFiltersUI.statusFlag.setSelectedValues([statusFlagCardBtn.dataset.statusFlagCard]);
@@ -685,6 +892,22 @@ function initLifecycleTabEvents() {
     if (statusFlagClearBtn) {
       cohortFiltersUI.statusFlag.setSelectedValues(LIFECYCLE_STATUS_FLAGS);
       renderLifecycleStatusFlagCards();
+      renderLifecycleCohortSection();
+      return;
+    }
+
+    const peerComparisonCardBtn = e.target.closest('button[data-peer-comparison-card]');
+    if (peerComparisonCardBtn) {
+      cohortFiltersUI.peerComparison.setSelectedValues([peerComparisonCardBtn.dataset.peerComparisonCard]);
+      renderLifecyclePeerComparisonCards();
+      renderLifecycleCohortSection();
+      return;
+    }
+
+    const peerComparisonClearBtn = e.target.closest('button[data-peer-comparison-clear]');
+    if (peerComparisonClearBtn) {
+      cohortFiltersUI.peerComparison.setSelectedValues(LIFECYCLE_PEER_COMPARISONS);
+      renderLifecyclePeerComparisonCards();
       renderLifecycleCohortSection();
       return;
     }

@@ -32,8 +32,8 @@ function bigLotClause(bigLotFilter) {
 const FILTER_COLUMNS = {
   branch:      'Branch',
   productType: 'Material Type Desc.',
-  level:       'Level No',
   zone:        'Zone',
+  suiteNo:     'Suite No',
 };
 
 // Every filter accepts either a single value or an array — empty/missing means "All" (no
@@ -81,7 +81,7 @@ function resolveAgeMonths(ageMonths) {
 }
 
 export function getLifecycleFilters(filters = {}) {
-  const { branch, productType, bigLotFilter } = filters;
+  const { branch, bigLotFilter } = filters;
 
   const { where: branchWhere, params: branchParams } = buildWhere({ bigLotFilter });
   const branches = distinctColumn('Branch', branchWhere, branchParams);
@@ -89,10 +89,7 @@ export function getLifecycleFilters(filters = {}) {
   const { where: productWhere, params: productParams } = buildWhere({ branch, bigLotFilter });
   const productTypes = distinctColumn('Material Type Desc.', productWhere, productParams);
 
-  const { where: levelWhere, params: levelParams } = buildWhere({ branch, productType, bigLotFilter });
-  const levels = distinctColumn('Level No', levelWhere, levelParams);
-
-  return { branches, productTypes, levels };
+  return { branches, productTypes };
 }
 
 // ── New vs Aging Overview ──
@@ -172,6 +169,16 @@ export function getLifecycleOverview(filters = {}) {
   };
 }
 
+// Suite No is meaningfully populated (>50%) for only a couple of structured product types —
+// verified against actual data: NV Baby Paradise 100%, NV Niche 68.3%, vs. NV Pedestal 32.2%
+// and NV Pet Niche 19.3% (kept Zone-only) and everything else ~0%. Those two get Suite No
+// promoted into the cohort key itself (Branch+ProductType+Zone+SuiteNo+CohortPeriod) — see
+// buildCohortsFromRows — rather than only reachable one drill-down step down.
+const SUITE_GROUPED_TYPES = ['NV Niche', 'NV Baby Paradise'];
+function isSuiteGrouped(productType) {
+  return SUITE_GROUPED_TYPES.includes(productType);
+}
+
 // ── Cohort grouping (shared by /curve and /cohort-table) ──
 function fetchLifecycleRows(filters) {
   const { where, params } = buildWhere(filters, [VALID_LOT_CREATE]);
@@ -180,6 +187,7 @@ function fetchLifecycleRows(filters) {
       TRIM("Branch")              AS branch,
       TRIM("Material Type Desc.") AS productType,
       TRIM("Zone")                AS zone,
+      TRIM("Suite No")            AS suiteNo,
       "Lot Create On"             AS lotCreateOn,
       "Sales Date"                AS salesDate,
       "Total Stock Case"          AS totalStock,
@@ -220,11 +228,13 @@ function nowMonthIndex() {
   return now.getFullYear() * 12 + (now.getMonth() + 1);
 }
 
-// Groups raw rows into cohorts (Branch+ProductType+Zone+CohortPeriod). Zone is the primary
-// cohort unit — a single zone launch is one cohort regardless of how many levels it spans
-// (Level is a drill-down detail within a zone-cohort, see getLifecycleLevelBreakdown, not a
-// top-level grouping key). Zone exists for flat-land product types too (unlike Level, which is
-// blank there), so this grouping works uniformly across structured and flat-land types. Per
+// Groups raw rows into cohorts, keyed Branch+ProductType+Zone+CohortPeriod (or
+// Branch+ProductType+Zone+SuiteNo+CohortPeriod for SUITE_GROUPED_TYPES — see isSuiteGrouped).
+// Zone is the primary cohort unit — a single zone (or zone+suite) launch is one cohort
+// regardless of how many levels it spans (Level is always a drill-down detail, see
+// getLifecycleLevelBreakdown, never a top-level grouping key). Zone exists for flat-land
+// product types too (unlike Level, which is blank there), so this grouping works uniformly
+// across structured and flat-land types. Per
 // spec: totalUnits/soldUnits/balanceUnits/balanceValue/avgPrice are summed/averaged across every
 // row in the cohort regardless of status; soldByMonth (the cumulative-sell-through curve's
 // raw material) only counts rows with a real sale (Total Sold Case > 0 — unsold OPEN lots
@@ -237,10 +247,18 @@ function buildCohortsFromRows(rows) {
     const created = parseYYYYMMDD(r.lotCreateOn);
     if (!created) continue;
     const cohortPeriod = cohortPeriodOf(created);
-    const key = `${r.branch}|${r.productType}|${r.zone}|${cohortPeriod}`;
+    const suiteGrouped = isSuiteGrouped(r.productType);
+    // Rows with no Suite No (even for a suite-grouped product type — Niche is only 68.3%
+    // populated) fall into their own zone-level "no suite data" bucket (suiteNo: null) rather
+    // than being dropped, so nothing silently disappears from the table.
+    const suiteNo = suiteGrouped && r.suiteNo ? r.suiteNo : null;
+    const key = suiteGrouped
+      ? `${r.branch}|${r.productType}|${r.zone}|${suiteNo}|${cohortPeriod}`
+      : `${r.branch}|${r.productType}|${r.zone}|${cohortPeriod}`;
     if (!cohorts.has(key)) {
       cohorts.set(key, {
-        branch: r.branch, productType: r.productType, zone: r.zone, cohortPeriod,
+        branch: r.branch, productType: r.productType, zone: r.zone,
+        suiteNo: suiteGrouped ? suiteNo : null, cohortPeriod,
         totalUnits: 0, soldUnits: 0, balanceUnits: 0, balanceValue: 0,
         priceSum: 0, priceCount: 0,
         soldByMonth: new Map(),
@@ -275,7 +293,9 @@ function buildCohortsFromRows(rows) {
       ageMonthsNow,
       avgPrice: c.priceCount > 0 ? c.priceSum / c.priceCount : 0,
       overallSellThroughPct: c.totalUnits > 0 ? (c.soldUnits / c.totalUnits) * 100 : 0,
-      cohortLabel: `${c.branch} - ${stripNVPrefix(c.productType)} - Zone ${c.zone} - ${c.cohortPeriod}`,
+      cohortLabel: `${c.branch} - ${stripNVPrefix(c.productType)} - Zone ${c.zone}`
+        + (c.suiteNo !== null ? ` - Suite ${c.suiteNo}` : isSuiteGrouped(c.productType) ? ' - No Suite Data' : '')
+        + ` - ${c.cohortPeriod}`,
     });
   }
   return list;
@@ -313,7 +333,8 @@ export function getLifecycleCurve(filters = {}) {
     }
     return {
       cohortLabel: c.cohortLabel, branch: c.branch, productType: c.productType, zone: c.zone,
-      cohortPeriod: c.cohortPeriod, totalUnits: c.totalUnits, ageMonthsNow: c.ageMonthsNow, points,
+      suiteNo: c.suiteNo, cohortPeriod: c.cohortPeriod, totalUnits: c.totalUnits,
+      ageMonthsNow: c.ageMonthsNow, points,
     };
   });
 
@@ -343,21 +364,104 @@ function cohortStatusFlag(cohort, ageMonths) {
 }
 
 const STATUS_FLAGS = ['New', 'Steady', 'Slowing', 'Stagnant', 'Sold Out'];
+const PEER_COMPARISONS = ['Above Peers', 'On Par', 'Below Peers', 'Insufficient Data'];
+
+// "Price Range" tiers are calibrated per product type, not one universal price scale (e.g.
+// Niche's bands are <30k/≥30k/≥50k while Burial Plot's are <100k/≥100k/≥200k/≥500k) — this
+// derives each product type's actual band boundaries from the observed MIN Unit Price per
+// label already present in the data, the same "Price Range" column Pricing Intelligence uses,
+// rather than inventing a fresh boundary scheme. Product types that carry no price bands at
+// all (Price Range = 'false' for every row — Baby Paradise, EBL, Pet Burial Plot, Pet Niche,
+// Seed, per routes/pricing.js's REAL_PRICE_RANGE comment) simply have no entry here.
+function getPriceRangeBandsByProductType() {
+  const rows = getDb().prepare(`
+    SELECT
+      TRIM("Material Type Desc.") AS productType,
+      TRIM("Price Range")         AS priceRange,
+      MIN("Unit Price")           AS minPrice
+    FROM master_stock
+    WHERE "Price Range" IS NOT NULL AND TRIM("Price Range") != '' AND TRIM("Price Range") != 'false'
+      AND "Unit Price" IS NOT NULL AND "Unit Price" > 0
+    GROUP BY TRIM("Material Type Desc."), TRIM("Price Range")
+  `).all();
+
+  const byType = new Map();
+  for (const r of rows) {
+    if (!byType.has(r.productType)) byType.set(r.productType, []);
+    byType.get(r.productType).push({ label: r.priceRange, minPrice: r.minPrice });
+  }
+  for (const bands of byType.values()) bands.sort((a, b) => a.minPrice - b.minPrice);
+  return byType;
+}
+
+// Classifies a cohort's avgPrice into its product type's Price Range tier (the band whose
+// minPrice is the largest one <= avgPrice). Product types with no bands at all fall back to a
+// single shared 'N/A' tier, so their peer comparison still degrades gracefully to "same product
+// type" instead of finding zero peers.
+function priceRangeTierFor(productType, avgPrice, bandsByType) {
+  const bands = bandsByType.get(productType);
+  if (!bands || !bands.length) return 'N/A';
+  let tier = bands[0].label;
+  for (const b of bands) {
+    if (avgPrice >= b.minPrice) tier = b.label;
+    else break;
+  }
+  return tier;
+}
 
 // The Cohort Table has its own decoupled Branch/Product Type filters (cohortFiltersUI in the
-// frontend) — separate from the tab-wide Branch/Product Type/Level filters that drive Overview/
-// Curve/New Zones/Agent Focus, same "own independent filters" pattern routes/pricing.js's Pivot
-// Builder already uses (pivotFiltersUI). Level is deliberately not one of them: Level is now a
-// per-row drill-down detail (getLifecycleLevelBreakdown), not a Cohort Table filter dimension.
+// frontend) — separate from the tab-wide Branch/Product Type filters that drive Overview/Curve/
+// New Zones/Agent Focus, same "own independent filters" pattern routes/pricing.js's Pivot
+// Builder already uses (pivotFiltersUI). Level is deliberately not one of them: Level is a
+// per-row drill-down detail (getLifecycleLevelBreakdown), never a Cohort Table filter dimension.
 export function getLifecycleCohortTable(filters = {}) {
   const ageMonths = resolveAgeMonths(filters.ageMonths);
   const { branch, productType, bigLotFilter } = filters;
   const cohorts = buildCohortsFromRows(fetchLifecycleRows({ branch, productType, bigLotFilter }));
 
+  // Peer Benchmark (item 3) always compares against the full, branch-unscoped set of cohorts
+  // sharing the same Product Type + Price Range tier — a genuine historical benchmark, not
+  // narrowed by whichever Branch the Cohort Table's own filters currently show. Product Type
+  // and bigLotFilter are still honored (no reason to pull types the user has excluded, and
+  // bigLotFilter is a real "exclude these lots from analysis" setting, not a display scope).
+  const peerUniverse = buildCohortsFromRows(fetchLifecycleRows({ productType, bigLotFilter }));
+  const priceRangeBands = getPriceRangeBandsByProductType();
+  const peerGroups = new Map();
+  for (const c of peerUniverse) {
+    const tier = priceRangeTierFor(c.productType, c.avgPrice, priceRangeBands);
+    const key = `${c.productType}|${tier}`;
+    if (!peerGroups.has(key)) peerGroups.set(key, []);
+    peerGroups.get(key).push(c);
+  }
+
+  // Peer group = same Product Type + Price Range tier, excluding the cohort itself (matched by
+  // its own natural key — `cohorts` and `peerUniverse` come from separate fetches, so this is
+  // never the same object even for the identical real-world cohort) and only including peers
+  // old enough to have reached this cohort's own ageMonthsNow checkpoint. Below 3 qualifying
+  // peers, the comparison is "Insufficient Data" rather than a benchmark computed from a
+  // statistically meaningless handful of cohorts.
+  function computePeerComparison(c) {
+    const tier = priceRangeTierFor(c.productType, c.avgPrice, priceRangeBands);
+    const group = peerGroups.get(`${c.productType}|${tier}`) || [];
+    const peers = group.filter(p =>
+      p.ageMonthsNow >= c.ageMonthsNow &&
+      !(p.branch === c.branch && p.zone === c.zone && p.suiteNo === c.suiteNo && p.cohortPeriod === c.cohortPeriod));
+
+    if (peers.length < 3) return { priceRangeTier: tier, peerBenchmarkPct: null, peerComparison: 'Insufficient Data' };
+
+    const peerBenchmarkPct = peers.reduce((sum, p) => sum + cumulativePctAt(p, c.ageMonthsNow), 0) / peers.length;
+    const ownPct = cumulativePctAt(c, c.ageMonthsNow);
+    const delta = ownPct - peerBenchmarkPct;
+    const peerComparison = delta > 10 ? 'Above Peers' : delta < -10 ? 'Below Peers' : 'On Par';
+    return { priceRangeTier: tier, peerBenchmarkPct, peerComparison };
+  }
+
   const allRows = cohorts.map(c => ({
     branch: c.branch,
     productType: c.productType,
     zone: c.zone,
+    suiteNo: c.suiteNo,
+    suiteGrouped: isSuiteGrouped(c.productType),
     cohortPeriod: c.cohortPeriod,
     cohortLabel: c.cohortLabel,
     ageMonthsNow: c.ageMonthsNow,
@@ -368,11 +472,14 @@ export function getLifecycleCohortTable(filters = {}) {
     avgPrice: c.avgPrice,
     overallSellThroughPct: c.overallSellThroughPct,
     statusFlag: cohortStatusFlag(c, ageMonths),
+    ...computePeerComparison(c),
   }));
 
-  // Computed BEFORE the statusFlag filter below (over the Branch/Product Type scope only), so
-  // the Status Flag summary cards always show all 5 flags' real counts/values regardless of
-  // which flag (if any) is currently selected — clicking a card narrows `rows`, never the cards.
+  // Both summaries are computed BEFORE their own filter dimension (over whatever the OTHER
+  // filters have already narrowed to), so every card always shows a real count/value regardless
+  // of which value (if any) of ITS OWN dimension is currently selected — clicking a card narrows
+  // `rows`, never the cards. Peer Comparison summary respects the Status Flag filter (computed
+  // from `afterStatusFlag`, not `allRows`) so the two summary rows read as a consistent pair.
   const statusFlagSummary = STATUS_FLAGS.map(flag => {
     const matching = allRows.filter(r => r.statusFlag === flag);
     return {
@@ -383,10 +490,22 @@ export function getLifecycleCohortTable(filters = {}) {
   });
 
   const statusFlagList = toArray(filters.statusFlag).map(v => String(v).trim()).filter(Boolean);
-  const rows = statusFlagList.length ? allRows.filter(r => statusFlagList.includes(r.statusFlag)) : allRows;
+  const afterStatusFlag = statusFlagList.length ? allRows.filter(r => statusFlagList.includes(r.statusFlag)) : allRows;
+
+  const peerComparisonSummary = PEER_COMPARISONS.map(pc => {
+    const matching = afterStatusFlag.filter(r => r.peerComparison === pc);
+    return {
+      peerComparison: pc,
+      count: matching.length,
+      balanceValue: matching.reduce((sum, r) => sum + r.balanceValue, 0),
+    };
+  });
+
+  const peerComparisonList = toArray(filters.peerComparison).map(v => String(v).trim()).filter(Boolean);
+  const rows = peerComparisonList.length ? afterStatusFlag.filter(r => peerComparisonList.includes(r.peerComparison)) : afterStatusFlag;
 
   rows.sort((a, b) => b.balanceValue - a.balanceValue);
-  return { rows, ageMonths, statusFlagSummary };
+  return { rows, ageMonths, statusFlagSummary, peerComparisonSummary };
 }
 
 // Parses "YYYY-Qn" (CohortPeriod) into a [start, end) date range on Lot Create On. Mirrors
@@ -404,17 +523,71 @@ function cohortPeriodDateRange(cohortPeriod) {
   return { start, end };
 }
 
-// Level Breakdown — the "+" expand on a Cohort Table row (structured product types only; flat
-// land has no Level). Scoped to one row's own exact Branch+ProductType+Zone+CohortPeriod, same
-// grain the row's own View Lots drills into, just aggregated by Level instead of listing lots.
-export function getLifecycleLevelBreakdown(filters = {}) {
+// Suite Breakdown — the "+" expand on a Cohort Table row, for the remaining structured types
+// whose Suite No is populated often enough to be a useful drill-down but not enough to promote
+// into the cohort key itself (NV Pedestal 32.2%, NV Pet Niche 19.3% — see SUITE_GROUPED_TYPES
+// for the >50% types that skip this step entirely and go straight to Level Breakdown). Scoped
+// to one row's own exact Branch+ProductType+Zone+CohortPeriod, same grain the row's own View
+// Lots drills into. Rows with no Suite No (blank/NULL) are excluded rather than bucketed into
+// 'Unknown' — a given zone-cohort can still have zero populated Suite No rows even though the
+// product type as a whole has some; the frontend falls back to a whole-zone Level Breakdown
+// when this comes back empty.
+export function getLifecycleSuiteBreakdown(filters = {}) {
   const { branch, productType, zone, cohortPeriod } = filters;
+  const extra = [VALID_LOT_CREATE, `"Suite No" IS NOT NULL AND TRIM("Suite No") != ''`];
+  const cohortRange = cohortPeriod ? cohortPeriodDateRange(cohortPeriod) : null;
+  if (cohortRange) {
+    extra.push(`${LOT_CREATE_DATE_EXPR} >= '${cohortRange.start}' AND ${LOT_CREATE_DATE_EXPR} < '${cohortRange.end}'`);
+  }
+  const { where, params } = buildWhere({ branch, productType, zone, bigLotFilter: filters.bigLotFilter }, extra);
+
+  const rows = getDb().prepare(`
+    SELECT
+      TRIM("Suite No")            AS suiteNo,
+      SUM("Total Stock Case")     AS totalUnits,
+      SUM("Total Sold Case")      AS soldUnits,
+      SUM("Total Balance Case")   AS balanceUnits,
+      SUM("Total Balance Amount") AS balanceValue
+    FROM master_stock
+    ${where}
+    GROUP BY TRIM("Suite No")
+  `).all(...params);
+
+  const result = rows.map(r => ({
+    suiteNo: r.suiteNo,
+    totalUnits: r.totalUnits || 0,
+    balanceUnits: r.balanceUnits || 0,
+    balanceValue: r.balanceValue || 0,
+    sellThroughPct: r.totalUnits > 0 ? ((r.soldUnits || 0) / r.totalUnits) * 100 : 0,
+  })).sort((a, b) => b.balanceValue - a.balanceValue);
+
+  return { rows: result };
+}
+
+// Level Breakdown — reached directly from a Cohort Table row's "+" for SUITE_GROUPED_TYPES
+// (scoped to that exact Zone+Suite already baked into the cohort) and for EBL/flat-suite-less
+// zone-cohorts (unscoped, whole zone); nested one level deeper for the remaining structured
+// types via a Suite Breakdown row. Scoped to the row's own exact Branch+ProductType+Zone+
+// CohortPeriod, optionally narrowed further to a single Suite No.
+export function getLifecycleLevelBreakdown(filters = {}) {
+  const { branch, productType, zone, suiteNo, cohortPeriod } = filters;
   const extra = [VALID_LOT_CREATE];
   const cohortRange = cohortPeriod ? cohortPeriodDateRange(cohortPeriod) : null;
   if (cohortRange) {
     extra.push(`${LOT_CREATE_DATE_EXPR} >= '${cohortRange.start}' AND ${LOT_CREATE_DATE_EXPR} < '${cohortRange.end}'`);
   }
-  const { where, params } = buildWhere({ branch, productType, zone }, extra);
+  // A single empty-string suiteNo means "the lots with no Suite No at all" — the leftover
+  // bucket for a SUITE_GROUPED_TYPES cohort whose Suite No wasn't populated (see
+  // buildCohortsFromRows). buildWhere's normal IN-clause can't express "blank" (its FILTER_
+  // COLUMNS convention treats an empty value as "no filter", not "filter for blank"), so this
+  // is special-cased into its own SQL fragment instead of being routed through FILTER_COLUMNS.
+  const suiteList = toArray(suiteNo);
+  const wantsBlankSuite = suiteList.length === 1 && suiteList[0] === '';
+  if (wantsBlankSuite) extra.push(`("Suite No" IS NULL OR TRIM("Suite No") = '')`);
+  const { where, params } = buildWhere(
+    { branch, productType, zone, suiteNo: wantsBlankSuite ? undefined : suiteNo, bigLotFilter: filters.bigLotFilter },
+    extra,
+  );
 
   const rows = getDb().prepare(`
     SELECT
@@ -573,6 +746,15 @@ router.post('/cohort-table', (req, res) => {
     res.json(getLifecycleCohortTable(req.body || {}));
   } catch (err) {
     console.error('Lifecycle cohort-table error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/suite-breakdown', (req, res) => {
+  try {
+    res.json(getLifecycleSuiteBreakdown(req.body || {}));
+  } catch (err) {
+    console.error('Lifecycle suite-breakdown error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

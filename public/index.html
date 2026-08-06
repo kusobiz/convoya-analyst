@@ -749,10 +749,6 @@
             <div class="ms" id="lifecycleProductType"></div>
           </div>
           <div class="lot-filter-field">
-            <label class="lot-filter-label" for="lifecycleLevel">Level</label>
-            <div class="ms" id="lifecycleLevel"></div>
-          </div>
-          <div class="lot-filter-field">
             <label class="lot-filter-label" for="lifecycleAgeMonths">New / Aging Threshold</label>
             <div class="subtab-bar" id="lifecycleAgeToggle">
               <button type="button" class="subtab" data-age-months="1">1 mo</button>
@@ -825,8 +821,8 @@
           <canvas id="chartLifecycleCurve"></canvas>
         </div>
         <p class="lot-filter-help">One line per cohort (Branch + Product Type + Zone + launch quarter) — the
-          largest cohorts by unit count, narrowed by the filters above. Split by Branch/Product Type/Level using
-          those same filters to focus the chart on fewer cohorts.</p>
+          largest cohorts by unit count, narrowed by the filters above. Split by Branch/Product Type using those
+          same filters to focus the chart on fewer cohorts.</p>
         <div class="chart-empty-state" id="lifecycleCurveEmpty" style="display:none;">Click Search to load cohorts.</div>
       </div>
 
@@ -847,22 +843,36 @@
             <label class="lot-filter-label" for="cohortStatusFlag">Status Flag</label>
             <div class="ms" id="cohortStatusFlag"></div>
           </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="cohortPeerComparison">Peer Benchmark</label>
+            <div class="ms" id="cohortPeerComparison"></div>
+          </div>
         </div>
-        <p class="lot-filter-help">Branch, Product Type and Status Flag here are independent filters scoped to the
-          Cohort Table and its summary cards below — separate from the Branch/Product Type/Level filters above,
-          which drive the rest of this tab. New / Aging Threshold above still applies (it decides what "New" means
-          for Status Flag).</p>
+        <p class="lot-filter-help">Branch, Product Type, Status Flag and Peer Benchmark here are independent
+          filters scoped to the Cohort Table and its summary cards below — separate from the Branch/Product Type
+          filters above, which drive the rest of this tab. New / Aging Threshold above still applies (it decides
+          what "New" means for Status Flag).</p>
 
         <div class="status-flag-summary" id="lifecycleStatusFlagCards"></div>
+        <div class="status-flag-summary" id="lifecyclePeerComparisonCards" style="margin-top:0.4rem;"></div>
         <details class="status-flag-legend">
-          <summary>What do these Status Flags mean?</summary>
+          <summary>What do these Status Flag / Peer Benchmark badges mean?</summary>
           <div class="status-flag-legend-body">
+            <p><strong>Status Flag</strong></p>
             <p><strong>New</strong> — Launched within the selected age window — too early to judge performance yet.</p>
             <p><strong>Steady</strong> — Still selling at a reasonable pace relative to its own early performance, even if that pace was always modest.</p>
             <p><strong>Slowing</strong> — Recent selling pace has dropped below 70% of its early pace — an early warning sign.</p>
             <p><strong>Stagnant</strong> — Recent selling pace has collapsed below 30% of its early pace — this launch has lost real momentum, worth investigating (design relevance, pricing, or awareness).</p>
             <p><strong>Sold Out</strong> — Fully cleared — no remaining balance, no longer part of the inventory burden.</p>
             <p class="status-flag-legend-note">Early pace = sell-through in the first 3 months after launch. Recent pace = sell-through in the most recent 3 months relative to today.</p>
+            <p style="margin-top:0.6rem;"><strong>Peer Benchmark</strong></p>
+            <p>Peer Benchmark compares a cohort's sell-through so far against how similar product types in the
+              same price range typically performed at the same age — helping catch underperforming launches
+              early, before enough time has passed to show up as Slowing or Stagnant.</p>
+            <p><strong>Above Peers</strong> — Selling at least 10 percentage points faster than comparable cohorts at this age.</p>
+            <p><strong>On Par</strong> — Within 10 percentage points of comparable cohorts at this age.</p>
+            <p><strong>Below Peers</strong> — Selling at least 10 percentage points slower than comparable cohorts at this age — worth a closer look even if Status Flag still reads New or Steady.</p>
+            <p><strong>Insufficient Data</strong> — Fewer than 3 comparable peer cohorts (same Product Type + Price Range tier, old enough to have reached this cohort's own age) exist to benchmark against.</p>
           </div>
         </details>
 
