@@ -792,15 +792,24 @@
         </div>
       </div>
 
-      <!-- Section 1b: Newly Launched Zones -->
+      <!-- Section 1b: Newly Launched Zones & Suites -->
       <div class="table-card">
-        <h3 class="table-title">Newly Launched Zones</h3>
+        <h3 class="table-title">Newly Launched Zones &amp; Suites</h3>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="lifecyclePeerPresetNewZones">Peer Benchmark Preset</label>
+            <select class="branch-select" id="lifecyclePeerPresetNewZones"></select>
+          </div>
+        </div>
+        <p class="lot-filter-help">Peer Benchmark Preset is shared with the Cohort Table below — changing it here
+          (or there) updates both. It controls how the Status Flag / Peer Benchmark badges' peer group is defined;
+          see the legend under the Cohort Table for details.</p>
         <div class="drilldown-toolbar" id="lifecycleNewZonesToolbar"></div>
         <div class="table-scroll">
           <table id="tableLifecycleNewZones">
             <thead><tr id="lifecycleNewZonesHeadRow"></tr></thead>
             <tbody id="lifecycleNewZonesBody">
-              <tr><td style="text-align:center;color:var(--muted)">Click Search to load newly launched zones.</td></tr>
+              <tr><td style="text-align:center;color:var(--muted)">Click Search to load newly launched zones &amp; suites.</td></tr>
             </tbody>
           </table>
         </div>
@@ -809,9 +818,11 @@
             <span>&#11015;</span> Export to Excel
           </button>
         </div>
-        <p class="lot-filter-help">One row per Branch + Product Type + Zone whose EARLIEST lot was created within
-          the New / Aging Threshold above — i.e. the whole zone is a recent launch, not just a few individual lots
-          trickling in. Click "View Lots" to see that zone's unsold (OPEN) lots.</p>
+        <p class="lot-filter-help">One row per Branch + Product Type + Zone (or Zone + Suite No, for product types
+          where Suite No is meaningfully populated — same threshold as the Cohort Table's Suite grouping) whose
+          EARLIEST lot was created within the New / Aging Threshold above — i.e. the whole zone/suite is a recent
+          launch, not just a few individual lots trickling in. Click "View Lots" to see its unsold (OPEN) lots, or
+          the Peer Benchmark badge for the comparison detail.</p>
       </div>
 
       <!-- Section 2: Lifecycle Curve -->
@@ -847,11 +858,16 @@
             <label class="lot-filter-label" for="cohortPeerComparison">Peer Benchmark</label>
             <div class="ms" id="cohortPeerComparison"></div>
           </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="cohortPeerPreset">Peer Benchmark Preset</label>
+            <select class="branch-select" id="cohortPeerPreset"></select>
+          </div>
         </div>
         <p class="lot-filter-help">Branch, Product Type, Status Flag and Peer Benchmark here are independent
           filters scoped to the Cohort Table and its summary cards below — separate from the Branch/Product Type
           filters above, which drive the rest of this tab. New / Aging Threshold above still applies (it decides
-          what "New" means for Status Flag).</p>
+          what "New" means for Status Flag). Peer Benchmark Preset is shared with Newly Launched Zones &amp; Suites
+          above.</p>
 
         <div class="status-flag-summary" id="lifecycleStatusFlagCards"></div>
         <div class="status-flag-summary" id="lifecyclePeerComparisonCards" style="margin-top:0.4rem;"></div>
@@ -892,7 +908,17 @@
         </div>
         <p class="lot-filter-help">Click "View Lots" on a row to drill into that cohort's individual unsold (OPEN)
           lots, with a Lot Type filter scoped to that cohort. For structured product types, click "+" to break the
-          zone-cohort down by Level.</p>
+          zone-cohort down by Level. Click a Peer Benchmark badge to see exactly which peer cohorts it was compared
+          against.</p>
+      </div>
+
+      <!-- Peer Benchmark transparency panel (item 2) — shared by the Cohort Table and Newly
+           Launched Zones & Suites, reuses the Sales Velocity tab's modal styling. -->
+      <div class="velo-modal-overlay" id="lifecyclePeerModal" hidden>
+        <div class="velo-modal-box">
+          <button type="button" class="lifecycle-peer-modal-close" id="lifecyclePeerModalClose" aria-label="Close">&times;</button>
+          <div id="lifecyclePeerModalContent"></div>
+        </div>
       </div>
 
       <!-- Section 4: Agent Focus Snapshot -->

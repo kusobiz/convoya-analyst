@@ -188,6 +188,7 @@ function fetchLifecycleRows(filters) {
       TRIM("Material Type Desc.") AS productType,
       TRIM("Zone")                AS zone,
       TRIM("Suite No")            AS suiteNo,
+      TRIM("Eye Level/Non Eye Level") AS eyeLevel,
       "Lot Create On"             AS lotCreateOn,
       "Sales Date"                AS salesDate,
       "Total Stock Case"          AS totalStock,
@@ -241,6 +242,16 @@ function nowMonthIndex() {
 // carry a placeholder Sales Date equal to Lot Create On and are always excluded here),
 // bucketed by that lot's own monthsSinceLaunch = its Sales Date month index minus its own
 // Lot Create On month index.
+// Picks the value with the largest weighted count out of a Map(value -> weight) — used for
+// Eye Level, since a cohort's raw rows can carry a mix of "Eye Level"/"Non Eye Level"/blank
+// (unlike Price Range, which is derived from a single avgPrice number), so the cohort's own
+// Eye Level for peer-grouping purposes is whichever value the bulk of its units actually carry.
+function dominantFromCounts(counts) {
+  let dominant = 'Unknown', max = -1;
+  for (const [k, v] of counts) { if (v > max) { max = v; dominant = k; } }
+  return dominant;
+}
+
 function buildCohortsFromRows(rows) {
   const cohorts = new Map();
   for (const r of rows) {
@@ -261,6 +272,7 @@ function buildCohortsFromRows(rows) {
         suiteNo: suiteGrouped ? suiteNo : null, cohortPeriod,
         totalUnits: 0, soldUnits: 0, balanceUnits: 0, balanceValue: 0,
         priceSum: 0, priceCount: 0,
+        eyeLevelCounts: new Map(),
         soldByMonth: new Map(),
       });
     }
@@ -274,6 +286,9 @@ function buildCohortsFromRows(rows) {
     c.balanceUnits += Number(r.totalBalance) || 0;
     c.balanceValue += Number(r.totalBalanceAmount) || 0;
     if (unitPrice > 0) { c.priceSum += unitPrice; c.priceCount += 1; }
+
+    const eyeLevel = String(r.eyeLevel || '').trim() || 'Unknown';
+    c.eyeLevelCounts.set(eyeLevel, (c.eyeLevelCounts.get(eyeLevel) || 0) + totalStock);
 
     if (totalSold > 0) {
       const sold = parseYYYYMMDD(r.salesDate);
@@ -293,9 +308,65 @@ function buildCohortsFromRows(rows) {
       ageMonthsNow,
       avgPrice: c.priceCount > 0 ? c.priceSum / c.priceCount : 0,
       overallSellThroughPct: c.totalUnits > 0 ? (c.soldUnits / c.totalUnits) * 100 : 0,
+      eyeLevel: dominantFromCounts(c.eyeLevelCounts),
       cohortLabel: `${c.branch} - ${stripNVPrefix(c.productType)} - Zone ${c.zone}`
         + (c.suiteNo !== null ? ` - Suite ${c.suiteNo}` : isSuiteGrouped(c.productType) ? ' - No Suite Data' : '')
         + ` - ${c.cohortPeriod}`,
+    });
+  }
+  return list;
+}
+
+// Merges CohortPeriod-grained cohorts (buildCohortsFromRows' output) into one record per
+// Branch+ProductType+Zone (or +SuiteNo for SUITE_GROUPED_TYPES) — Newly Launched Zones &
+// Suites' grain, coarser than the Cohort Table's. A "launch" here means the group's OWN
+// earliest CohortPeriod, so soldByMonth from each sub-cohort is re-based onto that common
+// origin (offset by how many months later that sub-cohort's own quarter started) before being
+// summed, giving one coherent cumulative-sell-through curve for cohortStatusFlag/
+// computePeerStats to run on — the same shape a single buildCohortsFromRows cohort has, just
+// spanning however many quarters this zone/suite has actually launched lots in.
+function buildZoneSuiteGroups(cohorts) {
+  const groups = new Map();
+  for (const c of cohorts) {
+    const key = isSuiteGrouped(c.productType)
+      ? `${c.branch}|${c.productType}|${c.zone}|${c.suiteNo}`
+      : `${c.branch}|${c.productType}|${c.zone}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(c);
+  }
+
+  const nowMI = nowMonthIndex();
+  const list = [];
+  for (const subCohorts of groups.values()) {
+    const earliestStartMI = Math.min(...subCohorts.map(c => cohortPeriodStartMonthIndex(c.cohortPeriod)));
+    const ageMonthsNow = Math.max(0, nowMI - earliestStartMI);
+
+    let totalUnits = 0, soldUnits = 0, balanceUnits = 0, balanceValue = 0, priceSum = 0, priceCount = 0;
+    const soldByMonth = new Map();
+    const eyeLevelCounts = new Map();
+    for (const c of subCohorts) {
+      totalUnits += c.totalUnits;
+      soldUnits += c.soldUnits;
+      balanceUnits += c.balanceUnits;
+      balanceValue += c.balanceValue;
+      priceSum += c.priceSum;
+      priceCount += c.priceCount;
+      for (const [ev, cnt] of c.eyeLevelCounts) eyeLevelCounts.set(ev, (eyeLevelCounts.get(ev) || 0) + cnt);
+      const offset = cohortPeriodStartMonthIndex(c.cohortPeriod) - earliestStartMI;
+      for (const [m, sold] of c.soldByMonth) {
+        const rebasedM = m + offset;
+        soldByMonth.set(rebasedM, (soldByMonth.get(rebasedM) || 0) + sold);
+      }
+    }
+    const first = subCohorts[0];
+    list.push({
+      branch: first.branch, productType: first.productType, zone: first.zone, suiteNo: first.suiteNo,
+      cohortPeriod: undefined,
+      totalUnits, soldUnits, balanceUnits, balanceValue,
+      avgPrice: priceCount > 0 ? priceSum / priceCount : 0,
+      overallSellThroughPct: totalUnits > 0 ? (soldUnits / totalUnits) * 100 : 0,
+      eyeLevel: dominantFromCounts(eyeLevelCounts),
+      ageMonthsNow, soldByMonth,
     });
   }
   return list;
@@ -409,6 +480,79 @@ function priceRangeTierFor(productType, avgPrice, bandsByType) {
   return tier;
 }
 
+// ── Peer Benchmark presets ──
+// Product Type is always part of every preset (never compare across different product types).
+const PEER_PRESET_LABELS = {
+  'product-price':          'Same Product Type & Price Range',
+  'product-price-branch':   '+ Same Branch',
+  'product-price-eyelevel': '+ Same Eye Level',
+  'product-only':           'Product Type Only (broadest)',
+};
+const PEER_PRESETS = Object.keys(PEER_PRESET_LABELS);
+function resolvePeerPreset(preset) {
+  return PEER_PRESETS.includes(preset) ? preset : 'product-price';
+}
+
+// The peer-group key for a cohort under a given preset — shared by every peer-grouping call
+// site (getLifecycleCohortTable, getLifecycleNewZonesAndSuites, getLifecyclePeerDetail) so they
+// can never drift out of sync with each other.
+function peerGroupKeyFor(c, preset, priceRangeBands) {
+  const tier = priceRangeTierFor(c.productType, c.avgPrice, priceRangeBands);
+  if (preset === 'product-only') return c.productType;
+  if (preset === 'product-price-branch') return `${c.productType}|${tier}|${c.branch}`;
+  if (preset === 'product-price-eyelevel') return `${c.productType}|${tier}|${c.eyeLevel}`;
+  return `${c.productType}|${tier}`; // 'product-price' (default)
+}
+
+function buildPeerGroups(peerUniverse, preset, priceRangeBands) {
+  const peerGroups = new Map();
+  for (const c of peerUniverse) {
+    const key = peerGroupKeyFor(c, preset, priceRangeBands);
+    if (!peerGroups.has(key)) peerGroups.set(key, []);
+    peerGroups.get(key).push(c);
+  }
+  return peerGroups;
+}
+
+// Identity match used to exclude a cohort from its own peer group — `cohorts`/`peerUniverse`
+// (or their zone/suite-merged equivalents) always come from separate fetches/builds, so this is
+// never the same object even for the identical real-world cohort. cohortPeriod is undefined on
+// every buildZoneSuiteGroups record, so it's a harmless no-op discriminator at that grain
+// (branch+zone+suiteNo+productType alone is already the full key there).
+function isSameCohortIdentity(a, b) {
+  return a.branch === b.branch && a.zone === b.zone && a.suiteNo === b.suiteNo &&
+    a.productType === b.productType && a.cohortPeriod === b.cohortPeriod;
+}
+
+// Peer group = same preset key, excluding the cohort itself, only including peers old enough to
+// have reached this cohort's own ageMonthsNow checkpoint (so a 2-month-old peer never gets
+// asked for its cumulative sell-through at month 24).
+function findPeersFor(c, preset, priceRangeBands, peerGroups) {
+  const group = peerGroups.get(peerGroupKeyFor(c, preset, priceRangeBands)) || [];
+  return group.filter(p => p.ageMonthsNow >= c.ageMonthsNow && !isSameCohortIdentity(p, c));
+}
+
+// Below 3 qualifying peers, the comparison is "Insufficient Data" rather than a benchmark
+// computed from a statistically meaningless handful of cohorts.
+function computePeerStats(c, peers) {
+  if (peers.length < 3) return { peerBenchmarkPct: null, peerComparison: 'Insufficient Data' };
+  const peerBenchmarkPct = peers.reduce((sum, p) => sum + cumulativePctAt(p, c.ageMonthsNow), 0) / peers.length;
+  const ownPct = cumulativePctAt(c, c.ageMonthsNow);
+  const delta = ownPct - peerBenchmarkPct;
+  const peerComparison = delta > 10 ? 'Above Peers' : delta < -10 ? 'Below Peers' : 'On Par';
+  return { peerBenchmarkPct, peerComparison };
+}
+
+// Plain-language rendering of a cohort's own peer group under a preset, e.g. "Niche, Price
+// Range ≥30k, Branch: KL" — used by the transparency panel (getLifecyclePeerDetail).
+function peerGroupDefinitionText(c, preset, tier) {
+  const product = stripNVPrefix(c.productType);
+  if (preset === 'product-only') return product;
+  if (preset === 'product-price-branch') return `${product}, Price Range ${tier}, Branch: ${c.branch}`;
+  if (preset === 'product-price-eyelevel') return `${product}, Price Range ${tier}, ${c.eyeLevel}`;
+  return `${product}, Price Range ${tier}`;
+}
+
 // The Cohort Table has its own decoupled Branch/Product Type filters (cohortFiltersUI in the
 // frontend) — separate from the tab-wide Branch/Product Type filters that drive Overview/Curve/
 // New Zones/Agent Focus, same "own independent filters" pattern routes/pricing.js's Pivot
@@ -417,63 +561,42 @@ function priceRangeTierFor(productType, avgPrice, bandsByType) {
 export function getLifecycleCohortTable(filters = {}) {
   const ageMonths = resolveAgeMonths(filters.ageMonths);
   const { branch, productType, bigLotFilter } = filters;
+  const preset = resolvePeerPreset(filters.peerPreset);
   const cohorts = buildCohortsFromRows(fetchLifecycleRows({ branch, productType, bigLotFilter }));
 
-  // Peer Benchmark (item 3) always compares against the full, branch-unscoped set of cohorts
-  // sharing the same Product Type + Price Range tier — a genuine historical benchmark, not
-  // narrowed by whichever Branch the Cohort Table's own filters currently show. Product Type
-  // and bigLotFilter are still honored (no reason to pull types the user has excluded, and
-  // bigLotFilter is a real "exclude these lots from analysis" setting, not a display scope).
+  // Peer Benchmark always compares against the full, branch-unscoped set of cohorts (branch is
+  // re-applied per-preset below, only for the "+ Same Branch" preset) sharing the same Product
+  // Type — a genuine historical benchmark, not narrowed by whichever Branch the Cohort Table's
+  // own filters currently show. Product Type and bigLotFilter are still honored (no reason to
+  // pull types the user has excluded, and bigLotFilter is a real "exclude these lots from
+  // analysis" setting, not a display scope).
   const peerUniverse = buildCohortsFromRows(fetchLifecycleRows({ productType, bigLotFilter }));
   const priceRangeBands = getPriceRangeBandsByProductType();
-  const peerGroups = new Map();
-  for (const c of peerUniverse) {
-    const tier = priceRangeTierFor(c.productType, c.avgPrice, priceRangeBands);
-    const key = `${c.productType}|${tier}`;
-    if (!peerGroups.has(key)) peerGroups.set(key, []);
-    peerGroups.get(key).push(c);
-  }
+  const peerGroups = buildPeerGroups(peerUniverse, preset, priceRangeBands);
 
-  // Peer group = same Product Type + Price Range tier, excluding the cohort itself (matched by
-  // its own natural key — `cohorts` and `peerUniverse` come from separate fetches, so this is
-  // never the same object even for the identical real-world cohort) and only including peers
-  // old enough to have reached this cohort's own ageMonthsNow checkpoint. Below 3 qualifying
-  // peers, the comparison is "Insufficient Data" rather than a benchmark computed from a
-  // statistically meaningless handful of cohorts.
-  function computePeerComparison(c) {
-    const tier = priceRangeTierFor(c.productType, c.avgPrice, priceRangeBands);
-    const group = peerGroups.get(`${c.productType}|${tier}`) || [];
-    const peers = group.filter(p =>
-      p.ageMonthsNow >= c.ageMonthsNow &&
-      !(p.branch === c.branch && p.zone === c.zone && p.suiteNo === c.suiteNo && p.cohortPeriod === c.cohortPeriod));
-
-    if (peers.length < 3) return { priceRangeTier: tier, peerBenchmarkPct: null, peerComparison: 'Insufficient Data' };
-
-    const peerBenchmarkPct = peers.reduce((sum, p) => sum + cumulativePctAt(p, c.ageMonthsNow), 0) / peers.length;
-    const ownPct = cumulativePctAt(c, c.ageMonthsNow);
-    const delta = ownPct - peerBenchmarkPct;
-    const peerComparison = delta > 10 ? 'Above Peers' : delta < -10 ? 'Below Peers' : 'On Par';
-    return { priceRangeTier: tier, peerBenchmarkPct, peerComparison };
-  }
-
-  const allRows = cohorts.map(c => ({
-    branch: c.branch,
-    productType: c.productType,
-    zone: c.zone,
-    suiteNo: c.suiteNo,
-    suiteGrouped: isSuiteGrouped(c.productType),
-    cohortPeriod: c.cohortPeriod,
-    cohortLabel: c.cohortLabel,
-    ageMonthsNow: c.ageMonthsNow,
-    totalUnits: c.totalUnits,
-    soldUnits: c.soldUnits,
-    balanceUnits: c.balanceUnits,
-    balanceValue: c.balanceValue,
-    avgPrice: c.avgPrice,
-    overallSellThroughPct: c.overallSellThroughPct,
-    statusFlag: cohortStatusFlag(c, ageMonths),
-    ...computePeerComparison(c),
-  }));
+  const allRows = cohorts.map(c => {
+    const peers = findPeersFor(c, preset, priceRangeBands, peerGroups);
+    const { peerBenchmarkPct, peerComparison } = computePeerStats(c, peers);
+    return {
+      branch: c.branch,
+      productType: c.productType,
+      zone: c.zone,
+      suiteNo: c.suiteNo,
+      suiteGrouped: isSuiteGrouped(c.productType),
+      cohortPeriod: c.cohortPeriod,
+      cohortLabel: c.cohortLabel,
+      ageMonthsNow: c.ageMonthsNow,
+      totalUnits: c.totalUnits,
+      soldUnits: c.soldUnits,
+      balanceUnits: c.balanceUnits,
+      balanceValue: c.balanceValue,
+      avgPrice: c.avgPrice,
+      overallSellThroughPct: c.overallSellThroughPct,
+      statusFlag: cohortStatusFlag(c, ageMonths),
+      peerBenchmarkPct,
+      peerComparison,
+    };
+  });
 
   // Both summaries are computed BEFORE their own filter dimension (over whatever the OTHER
   // filters have already narrowed to), so every card always shows a real count/value regardless
@@ -505,7 +628,7 @@ export function getLifecycleCohortTable(filters = {}) {
   const rows = peerComparisonList.length ? afterStatusFlag.filter(r => peerComparisonList.includes(r.peerComparison)) : afterStatusFlag;
 
   rows.sort((a, b) => b.balanceValue - a.balanceValue);
-  return { rows, ageMonths, statusFlagSummary, peerComparisonSummary };
+  return { rows, ageMonths, statusFlagSummary, peerComparisonSummary, peerPreset: preset };
 }
 
 // Parses "YYYY-Qn" (CohortPeriod) into a [start, end) date range on Lot Create On. Mirrors
@@ -612,56 +735,108 @@ export function getLifecycleLevelBreakdown(filters = {}) {
   return { rows: result };
 }
 
-// Newly Launched Zones — one row per Branch+ProductType+Zone whose EARLIEST Lot Create On
-// (across every lot ever recorded in that zone) falls within the last ageMonths, i.e. the zone
-// itself is a recent launch, not just a few individual lots trickling in. Since ageMonths is
-// tested against the MIN Lot Create On of the group, every other lot in a qualifying zone is
-// necessarily >= that same threshold too — so the zone's full totals (not just its "new" slice)
-// are exactly its lifetime-to-date figures.
-export function getLifecycleNewZones(filters = {}) {
+// Newly Launched Zones & Suites — one row per Branch+ProductType+Zone (or +SuiteNo for
+// SUITE_GROUPED_TYPES, same threshold as the Cohort Table — see isSuiteGrouped) whose EARLIEST
+// Lot Create On (across every lot ever recorded in that zone/suite) falls within the last
+// ageMonths, i.e. the zone/suite itself is a recent launch, not just a few individual lots
+// trickling in. Reuses buildZoneSuiteGroups' own ageMonthsNow (derived from the group's
+// earliest CohortPeriod) for that test — since it's a lower bound, every lot in a qualifying
+// group is necessarily within the window too, so the group's full totals (not just a "new"
+// slice) are exactly its lifetime-to-date figures. Status Flag / Peer Comparison badges use the
+// same computation as the Cohort Table, sharing whichever peerPreset the caller passed in.
+export function getLifecycleNewZonesAndSuites(filters = {}) {
   const ageMonths = resolveAgeMonths(filters.ageMonths);
   const { branch, productType, bigLotFilter } = filters;
-  const { where, params } = buildWhere({ branch, productType, bigLotFilter }, [
-    VALID_LOT_CREATE,
-    `"Zone" IS NOT NULL AND TRIM("Zone") != ''`,
-  ]);
+  const preset = resolvePeerPreset(filters.peerPreset);
 
-  const rows = getDb().prepare(`
-    SELECT
-      TRIM("Branch")              AS branch,
-      TRIM("Material Type Desc.") AS productType,
-      TRIM("Zone")                AS zone,
-      MIN("Lot Create On")        AS earliestLotCreateOn,
-      SUM("Total Stock Case")     AS totalUnits,
-      SUM("Total Sold Case")      AS soldUnits,
-      SUM("Total Balance Case")   AS balanceUnits,
-      SUM("Total Balance Amount") AS balanceValue
-    FROM master_stock
-    ${where}
-    GROUP BY TRIM("Branch"), TRIM("Material Type Desc."), TRIM("Zone")
-  `).all(...params);
+  const cohorts = buildCohortsFromRows(fetchLifecycleRows({ branch, productType, bigLotFilter }));
+  const groups = buildZoneSuiteGroups(cohorts).filter(g => g.ageMonthsNow <= ageMonths);
 
-  const nowMI = nowMonthIndex();
-  const result = [];
-  for (const r of rows) {
-    const created = parseYYYYMMDD(r.earliestLotCreateOn);
-    if (!created) continue;
-    const zoneAgeMonths = Math.max(0, nowMI - monthIndexOf(created));
-    if (zoneAgeMonths > ageMonths) continue;
-    result.push({
-      branch: r.branch,
-      productType: r.productType,
-      zone: r.zone,
-      totalUnitsLaunched: r.totalUnits || 0,
-      ageMonths: zoneAgeMonths,
-      balanceUnits: r.balanceUnits || 0,
-      balanceValue: r.balanceValue || 0,
-      sellThroughPct: r.totalUnits > 0 ? ((r.soldUnits || 0) / r.totalUnits) * 100 : 0,
-    });
+  const peerCohorts = buildCohortsFromRows(fetchLifecycleRows({ productType, bigLotFilter }));
+  const peerUniverse = buildZoneSuiteGroups(peerCohorts);
+  const priceRangeBands = getPriceRangeBandsByProductType();
+  const peerGroups = buildPeerGroups(peerUniverse, preset, priceRangeBands);
+
+  const rows = groups.map(g => {
+    const peers = findPeersFor(g, preset, priceRangeBands, peerGroups);
+    const { peerBenchmarkPct, peerComparison } = computePeerStats(g, peers);
+    return {
+      branch: g.branch,
+      productType: g.productType,
+      zone: g.zone,
+      suiteNo: g.suiteNo,
+      suiteGrouped: isSuiteGrouped(g.productType),
+      totalUnitsLaunched: g.totalUnits,
+      ageMonths: g.ageMonthsNow,
+      balanceUnits: g.balanceUnits,
+      balanceValue: g.balanceValue,
+      sellThroughPct: g.overallSellThroughPct,
+      statusFlag: cohortStatusFlag(g, ageMonths),
+      peerBenchmarkPct,
+      peerComparison,
+    };
+  });
+
+  rows.sort((a, b) => b.totalUnitsLaunched - a.totalUnitsLaunched);
+  return { rows, ageMonths, peerPreset: preset };
+}
+
+// Peer Benchmark transparency (item 2) — locates the exact cohort a Status Flag/Peer Comparison
+// badge belongs to (either a Cohort Table row, when cohortPeriod is given, or a Newly Launched
+// Zones & Suites row, when it's omitted — matching buildCohortsFromRows vs buildZoneSuiteGroups'
+// two grains) and returns its full peer group under the given preset: the plain-language group
+// definition, how many peers, this cohort's own vs. the peer average sell-through at its current
+// age, and the largest 5 peer cohorts actually used, so the number can be sanity-checked instead
+// of taken on faith.
+export function getLifecyclePeerDetail(filters = {}) {
+  const { branch, productType, zone, suiteNo, cohortPeriod, bigLotFilter } = filters;
+  const preset = resolvePeerPreset(filters.peerPreset);
+  const priceRangeBands = getPriceRangeBandsByProductType();
+
+  const suiteList = toArray(suiteNo);
+  const wantsBlankSuite = suiteList.length === 1 && suiteList[0] === '';
+  const matchesSuite = (c) => wantsBlankSuite ? c.suiteNo === null : (suiteList.length ? c.suiteNo === suiteList[0] : true);
+
+  const ownCohorts = buildCohortsFromRows(fetchLifecycleRows({ branch: [branch], productType: [productType], bigLotFilter }));
+  const peerCohorts = buildCohortsFromRows(fetchLifecycleRows({ productType: [productType], bigLotFilter }));
+
+  let target, peerUniverse;
+  if (cohortPeriod) {
+    target = ownCohorts.find(c => c.branch === branch && c.zone === zone && c.cohortPeriod === cohortPeriod && matchesSuite(c));
+    peerUniverse = peerCohorts;
+  } else {
+    target = buildZoneSuiteGroups(ownCohorts).find(g => g.branch === branch && g.zone === zone && matchesSuite(g));
+    peerUniverse = buildZoneSuiteGroups(peerCohorts);
   }
+  if (!target) return { error: 'Cohort not found' };
 
-  result.sort((a, b) => b.totalUnitsLaunched - a.totalUnitsLaunched);
-  return { rows: result, ageMonths };
+  const peerGroups = buildPeerGroups(peerUniverse, preset, priceRangeBands);
+  const peers = findPeersFor(target, preset, priceRangeBands, peerGroups);
+  const { peerBenchmarkPct, peerComparison } = computePeerStats(target, peers);
+  const tier = priceRangeTierFor(target.productType, target.avgPrice, priceRangeBands);
+
+  const topPeers = [...peers]
+    .sort((a, b) => b.totalUnits - a.totalUnits)
+    .slice(0, 5)
+    .map(p => ({
+      branch: p.branch,
+      zone: p.zone,
+      suiteNo: p.suiteNo,
+      cohortPeriod: p.cohortPeriod || null,
+      sellThroughPctAtAge: cumulativePctAt(p, target.ageMonthsNow),
+    }));
+
+  return {
+    preset,
+    presetLabel: PEER_PRESET_LABELS[preset],
+    groupDefinitionText: peerGroupDefinitionText(target, preset, tier),
+    peerCount: peers.length,
+    ageMonthsNow: target.ageMonthsNow,
+    ownSellThroughPct: cumulativePctAt(target, target.ageMonthsNow),
+    peerBenchmarkPct,
+    peerComparison,
+    topPeers,
+  };
 }
 
 // Snapshot (current-state only, not a historical time series — see frontend copy) comparison
@@ -770,9 +945,18 @@ router.post('/level-breakdown', (req, res) => {
 
 router.post('/new-zones', (req, res) => {
   try {
-    res.json(getLifecycleNewZones(req.body || {}));
+    res.json(getLifecycleNewZonesAndSuites(req.body || {}));
   } catch (err) {
     console.error('Lifecycle new-zones error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/peer-detail', (req, res) => {
+  try {
+    res.json(getLifecyclePeerDetail(req.body || {}));
+  } catch (err) {
+    console.error('Lifecycle peer-detail error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
