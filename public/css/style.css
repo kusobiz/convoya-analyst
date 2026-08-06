@@ -522,6 +522,49 @@ tbody td {
 .badge--grey   { background: #f1f2f4; color: var(--muted); }
 .badge--lightgrey { background: #fafafa; color: #b0b3ba; border: 1px dashed #e2e6ee; }
 
+/* Peer Benchmark badge doubles as a button (opens the transparency panel) — reset the
+   default button chrome so it still reads as a plain badge chip. */
+.badge-btn {
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: inherit;
+}
+.badge-btn:hover { box-shadow: 0 0 0 2px rgba(26,44,91,0.25); }
+
+/* ── Peer Benchmark transparency panel (item 2) ── */
+.lifecycle-peer-modal-close {
+  display: block;
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem 0.5rem;
+}
+.lifecycle-peer-modal-close:hover { color: var(--red); }
+.peer-detail-title {
+  margin: 0 0 0.75rem;
+  color: var(--navy);
+  font-size: 1.05rem;
+}
+.peer-detail-line {
+  margin: 0 0 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  line-height: 1.5;
+}
+.peer-detail-subheading {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--navy);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 /* ── BD Focus Summary note ── */
 .bd-summary {
   background: linear-gradient(135deg, #eef2ff 0%, #f5f6f8 100%);
@@ -741,6 +784,18 @@ tbody td {
   font-size: 0.78rem;
   color: var(--muted);
   line-height: 1.6;
+}
+
+/* The New/Aging Threshold toggle (Product Lifecycle tab) is a .subtab-bar embedded as a single
+   filter control inside a .lot-filter-field — .subtab-bar's default spacing/border-bottom is
+   meant for page-level tab bars, not a single inline control, and was throwing off
+   .lot-filter-row's flex-end (bottom) alignment against the other Branch/Product Type/Status
+   Flag/Peer Benchmark Preset controls, making it sit visibly higher than the rest. Reset it to
+   sit flush like every other filter control. */
+.lot-filter-field .subtab-bar {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
 }
 
 /* Sales Velocity's metric toggle sits directly below the filter row within the same card —

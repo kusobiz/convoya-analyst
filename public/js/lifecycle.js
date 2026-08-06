@@ -43,6 +43,18 @@ const LIFECYCLE_PEER_COMPARISON_BADGE_CLASS = {
   'Below Peers': 'badge--red', 'Insufficient Data': 'badge--lightgrey',
 };
 
+// Peer Benchmark Preset — shared by the Cohort Table AND Newly Launched Zones & Suites (one
+// selection, not two independent ones; two <select> instances in the DOM, kept in sync — see
+// initLifecyclePeerPresetControls). Options/labels mirror routes/lifecycle.js's
+// PEER_PRESET_LABELS exactly.
+let lifecyclePeerPreset = 'product-price';
+const LIFECYCLE_PEER_PRESET_OPTIONS = [
+  { value: 'product-price',          label: 'Same Product Type & Price Range' },
+  { value: 'product-price-branch',   label: '+ Same Branch' },
+  { value: 'product-price-eyelevel', label: '+ Same Eye Level' },
+  { value: 'product-only',           label: 'Product Type Only (broadest)' },
+];
+
 // Suite No is meaningfully populated (>50%) for only NV Niche (68.3%) and NV Baby Paradise
 // (100%) — routes/lifecycle.js's SUITE_GROUPED_TYPES promotes those into the cohort key itself
 // (each row already IS a Zone+Suite combination), so their "+" skips straight to Level
@@ -162,6 +174,30 @@ function initLifecycleCohortFilters() {
   }).catch(e => console.error('[lifecycle] initLifecycleCohortFilters failed:', e));
 }
 
+// Two <select> instances share one selection (see lifecyclePeerPreset) — one next to Newly
+// Launched Zones & Suites, one in the Cohort Table's filter row, per item 1's "near the Cohort
+// Table (and Newly Launched Zones & Suites section)". Changing either updates the shared state,
+// syncs the other <select> to match, and re-renders both sections (item 1's "recompute...
+// whichever is more efficient" — both sections are cheap enough to just re-fetch).
+function initLifecyclePeerPresetControls() {
+  const selects = ['lifecyclePeerPresetNewZones', 'cohortPeerPreset']
+    .map(id => document.getElementById(id))
+    .filter(Boolean);
+  if (!selects.length) return;
+
+  const optionsHtml = LIFECYCLE_PEER_PRESET_OPTIONS.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
+  selects.forEach(sel => { sel.innerHTML = optionsHtml; sel.value = lifecyclePeerPreset; });
+
+  selects.forEach(sel => {
+    sel.addEventListener('change', () => {
+      lifecyclePeerPreset = sel.value;
+      selects.forEach(other => { if (other !== sel) other.value = lifecyclePeerPreset; });
+      renderLifecycleNewZonesSection(getLifecycleFilterValues());
+      renderLifecycleCohortSection();
+    });
+  });
+}
+
 // ── Section 1: New vs Aging Overview ──
 async function renderLifecycleOverview(filters) {
   try {
@@ -184,11 +220,14 @@ const LIFECYCLE_NEW_ZONES_COLUMNS = [
   { key: 'branch',             label: 'Branch',                  type: 'text' },
   { key: 'productType',        label: 'Product Type',            type: 'text',   render: r => stripNVPrefix(r.productType) },
   { key: 'zone',                label: 'Zone',                    type: 'text' },
+  { key: 'suiteNo',            label: 'Suite No',                type: 'text',   render: r => r.suiteNo || '—' },
   { key: 'totalUnitsLaunched', label: 'Total Units Launched',    type: 'number', render: r => fmt(r.totalUnitsLaunched) },
   { key: 'ageMonths',          label: 'Age (months)',            type: 'number', render: r => fmt(r.ageMonths) },
   { key: 'balanceUnits',       label: 'Balance Units',           type: 'number', render: r => fmt(r.balanceUnits) },
   { key: 'balanceValue',       label: 'Balance Value',           type: 'number', render: r => myr(r.balanceValue) },
   { key: 'sellThroughPct',     label: 'Sell-Through % So Far',   type: 'number', render: r => pct(r.sellThroughPct) },
+  { key: 'statusFlag',         label: 'Status Flag',             type: 'text',   render: r => `<span class="badge ${lifecycleStatusBadgeClass(r.statusFlag)}">${r.statusFlag}</span>` },
+  { key: 'peerComparison',     label: 'Peer Benchmark',          type: 'text',   render: r => renderPeerComparisonBadgeHTML(r) },
 ];
 
 function renderLifecycleNewZonesHead() {
@@ -236,9 +275,10 @@ function renderLifecycleNewZonesBody() {
   tbody.innerHTML = rows.map(r => {
     const cells = LIFECYCLE_NEW_ZONES_COLUMNS.map(col => `<td>${col.render ? col.render(r) : (r[col.key] ?? '')}</td>`).join('');
     const lotTypeFilter = renderLotTypeFilterHTML({ product: r.productType, branch: r.branch, priceRange: '', zone: r.zone });
+    const suiteNoAttr = r.suiteGrouped ? ` data-suite-no="${escapeHtml(r.suiteNo ?? '')}"` : '';
     const viewLotsBtn = `<button type="button" class="btn-view-lots" data-action="toggle-lifecycle-newzone-lots"
       data-product="${escapeHtml(r.productType)}" data-branch="${escapeHtml(r.branch)}"
-      data-zone="${escapeHtml(r.zone)}">View Lots</button>`;
+      data-zone="${escapeHtml(r.zone)}"${suiteNoAttr}>View Lots</button>`;
     return `<tr class="accordion-row">${cells}<td><div class="row-actions">${lotTypeFilter}${viewLotsBtn}</div></td></tr>
       <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>`;
   }).join('');
@@ -248,7 +288,7 @@ async function renderLifecycleNewZonesSection(filters) {
   const tbody = document.getElementById('lifecycleNewZonesBody');
   if (tbody) tbody.innerHTML = `<tr><td style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
   try {
-    const { rows } = await fetchLifecycleJSON('new-zones', filters);
+    const { rows } = await fetchLifecycleJSON('new-zones', { ...filters, peerPreset: lifecyclePeerPreset });
     lastLifecycleNewZoneRows = rows || [];
     renderLifecycleNewZonesHead();
     renderLifecycleNewZonesBody();
@@ -278,11 +318,13 @@ async function loadLifecycleNewZoneLotsContent(btn, content) {
       status: ['OPEN'],
       lotType,
     };
+    if (btn.dataset.suiteNo !== undefined) filters.suiteNo = [btn.dataset.suiteNo];
     const { rows, mode } = await fetchLotsDetail(filters);
     const totalQty = computeDrillTotalQty(rows);
+    const suiteLabel = btn.dataset.suiteNo !== undefined ? ` · Suite ${escapeHtml(btn.dataset.suiteNo || '(none)')}` : '';
     renderDrillDownPanel(content, {
       rows, mode,
-      titleLine: `${escapeHtml(stripNVPrefix(btn.dataset.product))} (${fmt(totalQty)} units) · ${escapeHtml(btn.dataset.branch)} · Zone ${escapeHtml(btn.dataset.zone)} — Unsold Lots`,
+      titleLine: `${escapeHtml(stripNVPrefix(btn.dataset.product))} (${fmt(totalQty)} units) · ${escapeHtml(btn.dataset.branch)} · Zone ${escapeHtml(btn.dataset.zone)}${suiteLabel} — Unsold Lots`,
       filenameBase: `lifecycle_newzone_lots_${sanitizeForFilename(btn.dataset.product)}_${sanitizeForFilename(btn.dataset.branch)}_${sanitizeForFilename(btn.dataset.zone)}`,
     });
     content.dataset.loaded = 'true';
@@ -310,18 +352,19 @@ function exportLifecycleNewZonesExcel() {
   if (!lastLifecycleNewZoneRows.length) { alert('No data to export. Run a search first.'); return; }
   if (typeof XLSX === 'undefined') { alert('Excel export library failed to load — check your connection and try again.'); return; }
 
-  const header = LIFECYCLE_NEW_ZONES_COLUMNS.map(c => c.label);
+  const header = [...LIFECYCLE_NEW_ZONES_COLUMNS.map(c => c.label), 'Peer Benchmark %'];
   const sorted = sortByKey(lastLifecycleNewZoneRows, lifecycleNewZonesSortState);
   const aoa = [header, ...sorted.map(r => [
-    r.branch, stripNVPrefix(r.productType), r.zone, r.totalUnitsLaunched, r.ageMonths,
+    r.branch, stripNVPrefix(r.productType), r.zone, r.suiteNo || '', r.totalUnitsLaunched, r.ageMonths,
     r.balanceUnits, Number(r.balanceValue.toFixed(2)), Number(r.sellThroughPct.toFixed(1)),
+    r.statusFlag, r.peerComparison, r.peerBenchmarkPct !== null ? Number(r.peerBenchmarkPct.toFixed(1)) : '',
   ])];
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = header.map(() => ({ wch: 18 }));
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'New Zones');
-  XLSX.writeFile(wb, `product_lifecycle_new_zones_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  XLSX.utils.book_append_sheet(wb, ws, 'New Zones & Suites');
+  XLSX.writeFile(wb, `product_lifecycle_new_zones_suites_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 // ── Section 2: Lifecycle Curve ──
@@ -391,7 +434,7 @@ const LIFECYCLE_COHORT_COLUMNS = [
   { key: 'avgPrice',              label: 'Avg Price',       type: 'number', render: r => myr(r.avgPrice) },
   { key: 'overallSellThroughPct', label: 'Sell-Through %',  type: 'number', render: r => pct(r.overallSellThroughPct) },
   { key: 'statusFlag',            label: 'Status Flag',     type: 'text',   render: r => `<span class="badge ${lifecycleStatusBadgeClass(r.statusFlag)}">${r.statusFlag}</span>` },
-  { key: 'peerComparison',        label: 'Peer Benchmark',  type: 'text',   render: r => `<span class="badge ${lifecyclePeerComparisonBadgeClass(r.peerComparison)}" title="${r.peerBenchmarkPct !== null ? `Peers: ${pct(r.peerBenchmarkPct)}` : 'Fewer than 3 comparable peer cohorts'}">${r.peerComparison}</span>` },
+  { key: 'peerComparison',        label: 'Peer Benchmark',  type: 'text',   render: r => renderPeerComparisonBadgeHTML(r) },
 ];
 
 function lifecycleStatusBadgeClass(flag) {
@@ -403,6 +446,82 @@ function lifecycleStatusBadgeClass(flag) {
 
 function lifecyclePeerComparisonBadgeClass(peerComparison) {
   return LIFECYCLE_PEER_COMPARISON_BADGE_CLASS[peerComparison] || 'badge--navy';
+}
+
+// Clickable Peer Benchmark badge, shared by the Cohort Table (r.cohortPeriod is a real value)
+// and Newly Launched Zones & Suites (r.cohortPeriod is undefined — a whole zone/suite, not one
+// quarter) — matches getLifecyclePeerDetail's own cohortPeriod-present-vs-absent branching.
+function renderPeerComparisonBadgeHTML(r) {
+  const cls = lifecyclePeerComparisonBadgeClass(r.peerComparison);
+  const title = r.peerBenchmarkPct !== null
+    ? `Peers: ${pct(r.peerBenchmarkPct)} — click for details`
+    : 'Fewer than 3 comparable peer cohorts — click for details';
+  const suiteAttr = r.suiteGrouped ? ` data-suite-no="${escapeHtml(r.suiteNo ?? '')}"` : '';
+  const cohortPeriodAttr = r.cohortPeriod !== undefined ? ` data-cohort-period="${escapeHtml(r.cohortPeriod)}"` : '';
+  return `<button type="button" class="badge badge-btn ${cls}" data-action="show-peer-detail"
+    data-branch="${escapeHtml(r.branch)}" data-product="${escapeHtml(r.productType)}" data-zone="${escapeHtml(r.zone)}"
+    ${suiteAttr}${cohortPeriodAttr} title="${title}">${escapeHtml(r.peerComparison)}</button>`;
+}
+
+// ── Peer Benchmark transparency panel (item 2) ──
+// Shared by both the Cohort Table and Newly Launched Zones & Suites — clicking either table's
+// Peer Comparison badge opens the same modal, fetching /api/lifecycle/peer-detail for that
+// exact cohort under whichever preset is currently active (lifecyclePeerPreset).
+async function showLifecyclePeerDetail(btn) {
+  const overlay = document.getElementById('lifecyclePeerModal');
+  const content = document.getElementById('lifecyclePeerModalContent');
+  if (!overlay || !content) return;
+  content.innerHTML = `<div class="drilldown-empty">Loading…</div>`;
+  overlay.removeAttribute('hidden');
+
+  const filters = {
+    branch: btn.dataset.branch,
+    productType: btn.dataset.product,
+    zone: btn.dataset.zone,
+    peerPreset: lifecyclePeerPreset,
+  };
+  if (btn.dataset.suiteNo !== undefined) filters.suiteNo = btn.dataset.suiteNo;
+  if (btn.dataset.cohortPeriod !== undefined) filters.cohortPeriod = btn.dataset.cohortPeriod;
+
+  try {
+    const d = await fetchLifecycleJSON('peer-detail', filters);
+    content.innerHTML = renderLifecyclePeerDetailHTML(d);
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[lifecycle] showLifecyclePeerDetail failed:', err);
+    content.innerHTML = `<div class="drilldown-empty" style="color:var(--red)">Error: ${err.message}</div>`;
+  }
+}
+
+function hideLifecyclePeerDetail() {
+  document.getElementById('lifecyclePeerModal')?.setAttribute('hidden', '');
+}
+
+function renderLifecyclePeerDetailHTML(d) {
+  if (d.error) return `<div class="drilldown-empty" style="color:var(--red)">${escapeHtml(d.error)}</div>`;
+
+  const peerRows = (d.topPeers || []).map(p => `<tr>
+    <td>${escapeHtml(p.branch)}</td>
+    <td>${escapeHtml(p.zone)}${p.suiteNo ? ' / ' + escapeHtml(p.suiteNo) : ''}</td>
+    <td>${escapeHtml(p.cohortPeriod || '(spans multiple)')}</td>
+    <td>${pct(p.sellThroughPctAtAge)}</td>
+  </tr>`).join('');
+
+  return `
+    <h3 class="peer-detail-title">Peer Benchmark Detail</h3>
+    <p class="peer-detail-line"><strong>Preset:</strong> ${escapeHtml(d.presetLabel)}</p>
+    <p class="peer-detail-line"><strong>Peer group:</strong> ${escapeHtml(d.groupDefinitionText)}</p>
+    <p class="peer-detail-line"><strong>Peer cohorts found:</strong> ${fmt(d.peerCount)} (old enough to have reached age ${fmt(d.ageMonthsNow)} months)</p>
+    <p class="peer-detail-line"><strong>This cohort's sell-through at month ${fmt(d.ageMonthsNow)}:</strong> ${pct(d.ownSellThroughPct)}</p>
+    <p class="peer-detail-line"><strong>Peer average at month ${fmt(d.ageMonthsNow)}:</strong> ${d.peerBenchmarkPct !== null ? pct(d.peerBenchmarkPct) : 'n/a'}</p>
+    <p class="peer-detail-line"><strong>Result:</strong> <span class="badge ${lifecyclePeerComparisonBadgeClass(d.peerComparison)}">${escapeHtml(d.peerComparison)}</span></p>
+    ${peerRows ? `
+      <p class="peer-detail-subheading">Top 5 peer cohorts used (largest by unit count)</p>
+      <table class="drilldown-table">
+        <thead><tr><th>Branch</th><th>Zone / Suite</th><th>Cohort Period</th><th>Sell-Through % at this age</th></tr></thead>
+        <tbody>${peerRows}</tbody>
+      </table>` : `<p class="peer-detail-line" style="color:var(--muted)">No peer cohorts to list.</p>`}
+  `;
 }
 
 function renderLifecycleCohortsHead() {
@@ -564,6 +683,7 @@ async function renderLifecycleCohortSection() {
     statusFlag: cohortFiltersUI.statusFlag.getValues(),
     peerComparison: cohortFiltersUI.peerComparison.getValues(),
     ageMonths: lifecycleAgeMonths,
+    peerPreset: lifecyclePeerPreset,
   };
   const tbody = document.getElementById('lifecycleCohortsBody');
   if (tbody) tbody.innerHTML = `<tr><td style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
@@ -880,6 +1000,9 @@ function initLifecycleTabEvents() {
     const suiteFallbackLevelsBtn = e.target.closest('button[data-action="toggle-lifecycle-suite-fallback-levels"]');
     if (suiteFallbackLevelsBtn) { showLifecycleWholeZoneLevelBreakdown(suiteFallbackLevelsBtn); return; }
 
+    const peerDetailBtn = e.target.closest('button[data-action="show-peer-detail"]');
+    if (peerDetailBtn) { showLifecyclePeerDetail(peerDetailBtn); return; }
+
     const statusFlagCardBtn = e.target.closest('button[data-status-flag-card]');
     if (statusFlagCardBtn) {
       cohortFiltersUI.statusFlag.setSelectedValues([statusFlagCardBtn.dataset.statusFlagCard]);
@@ -909,6 +1032,14 @@ function initLifecycleTabEvents() {
       cohortFiltersUI.peerComparison.setSelectedValues(LIFECYCLE_PEER_COMPARISONS);
       renderLifecyclePeerComparisonCards();
       renderLifecycleCohortSection();
+      return;
+    }
+
+    // Closes on the explicit "×" button or a click on the dimmed backdrop itself — not on a
+    // click inside the modal box (e.target === overlay only when the backdrop, not its content,
+    // was the actual click target).
+    if (e.target.id === 'lifecyclePeerModalClose' || e.target.id === 'lifecyclePeerModal') {
+      hideLifecyclePeerDetail();
       return;
     }
 
@@ -993,6 +1124,7 @@ function refreshLifecycleForBigLotFilter() {
 
 initLifecycleFilters();
 initLifecycleCohortFilters();
+initLifecyclePeerPresetControls();
 initLifecycleTabEvents();
 
 window.renderProductLifecycle = renderProductLifecycle;
