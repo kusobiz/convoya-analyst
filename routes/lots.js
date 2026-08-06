@@ -184,6 +184,14 @@ export function queryLotsDetail(filters = {}) {
   if (cohortRange) {
     extra.push(`${LOT_CREATE_DATE_EXPR} >= '${cohortRange.start}' AND ${LOT_CREATE_DATE_EXPR} < '${cohortRange.end}'`);
   }
+  // A single empty-string suiteNo (Product Lifecycle's "no Suite No data" cohort bucket for its
+  // suite-grouped product types) means "lots with no Suite No at all" — buildWhere above already
+  // silently dropped it (its universal "blank value = no filter" convention), so the actual
+  // blank-filter clause is added here instead, same pattern as cohortPeriod/minAgeDays.
+  const suiteNoList = toArray(filters.suiteNo);
+  if (suiteNoList.length === 1 && suiteNoList[0] === '') {
+    extra.push(`("Suite No" IS NULL OR TRIM("Suite No") = '')`);
+  }
   const fullWhere = extra.length
     ? (where ? `${where} AND ${extra.join(' AND ')}` : `WHERE ${extra.join(' AND ')}`)
     : where;
