@@ -2,6 +2,7 @@ import { Router } from 'express';
 import Database from 'better-sqlite3';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { stripProductPrefix as stripNVPrefix } from '../src/format.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = join(__dirname, '../data/stock.db');
@@ -17,9 +18,14 @@ function toArray(val) {
   return Array.isArray(val) ? val : [val];
 }
 
-// Display-only: the DB's "Material Type Desc." values are all prefixed "NV ".
-function stripNVPrefix(materialType) {
-  return String(materialType || '').replace(/^NV\s+/i, '');
+// Same normalization buildWhere's SQL IN-clause uses (trim + uppercase) — lets callers who
+// already have an in-memory cohort/group list (branch embedded on every record) filter it by
+// branch without a second SQL round trip. Empty/missing branch means "no filter, match all".
+function normalizedFilterList(val) {
+  return toArray(val).map(v => String(v).trim().toUpperCase()).filter(Boolean);
+}
+function matchesNormalizedList(value, normalizedList) {
+  return normalizedList.length === 0 || normalizedList.includes(String(value ?? '').trim().toUpperCase());
 }
 
 // "Big Lot" = Unit Price >= 500,000 MYR, matching the existing "≥500k" Price Range tier.
@@ -173,46 +179,28 @@ export function getLifecycleOverview(filters = {}) {
 // verified against actual data: NV Baby Paradise 100%, NV Niche 68.3%, vs. NV Pedestal 32.2%
 // and NV Pet Niche 19.3% (kept Zone-only) and everything else ~0%. Those two get Suite No
 // promoted into the cohort key itself (Branch+ProductType+Zone+SuiteNo+CohortPeriod) — see
-// buildCohortsFromRows — rather than only reachable one drill-down step down.
+// buildCohortsFromSql — rather than only reachable one drill-down step down.
 const SUITE_GROUPED_TYPES = ['NV Niche', 'NV Baby Paradise'];
 function isSuiteGrouped(productType) {
   return SUITE_GROUPED_TYPES.includes(productType);
 }
 
 // ── Cohort grouping (shared by /curve and /cohort-table) ──
-function fetchLifecycleRows(filters) {
-  const { where, params } = buildWhere(filters, [VALID_LOT_CREATE]);
-  return getDb().prepare(`
-    SELECT
-      TRIM("Branch")              AS branch,
-      TRIM("Material Type Desc.") AS productType,
-      TRIM("Zone")                AS zone,
-      TRIM("Suite No")            AS suiteNo,
-      TRIM("Eye Level/Non Eye Level") AS eyeLevel,
-      "Lot Create On"             AS lotCreateOn,
-      "Sales Date"                AS salesDate,
-      "Total Stock Case"          AS totalStock,
-      "Total Sold Case"           AS totalSold,
-      "Total Balance Case"        AS totalBalance,
-      "Total Balance Amount"      AS totalBalanceAmount,
-      "Unit Price"                AS unitPrice
-    FROM master_stock
-    ${where}
-  `).all(...params);
-}
-
-function parseYYYYMMDD(val) {
-  const s = String(val ?? '');
-  if (s.length < 6) return null;
-  const year = parseInt(s.slice(0, 4), 10);
-  const month = parseInt(s.slice(4, 6), 10);
-  if (!year || !month || month < 1 || month > 12) return null;
-  return { year, month };
-}
-
-const quarterOf = (month) => Math.floor((month - 1) / 3) + 1;
-const monthIndexOf = ({ year, month }) => year * 12 + month;
-const cohortPeriodOf = ({ year, month }) => `${year}-Q${quarterOf(month)}`;
+// "Lot Create On"/"Sales Date" are stored as integer YYYYMMDD — these expressions derive a
+// month-index (year*12+month) and CohortPeriod ("YYYY-Qn") directly in SQL, the same values
+// parseYYYYMMDD/monthIndexOf/cohortPeriodOf used to compute in JS per-row. Pushing this into the
+// GROUP BY (see buildCohortsFromSql) means SQLite returns one row per cohort instead of one row
+// per lot — for the ~260k-row master_stock table that's the difference between ~1,000 JS objects
+// and ~260,000, which is what was pushing the app over its PM2 memory ceiling under concurrent
+// requests.
+const LOT_YEAR_EXPR = `CAST(substr(CAST("Lot Create On" AS TEXT), 1, 4) AS INTEGER)`;
+const LOT_MONTH_EXPR = `CAST(substr(CAST("Lot Create On" AS TEXT), 5, 2) AS INTEGER)`;
+const LOT_MONTH_INDEX_EXPR = `(${LOT_YEAR_EXPR} * 12 + ${LOT_MONTH_EXPR})`;
+const COHORT_PERIOD_EXPR = `(${LOT_YEAR_EXPR} || '-Q' || (((${LOT_MONTH_EXPR} - 1) / 3) + 1))`;
+const SALES_MONTH_INDEX_EXPR = `(
+  CAST(substr(CAST("Sales Date" AS TEXT), 1, 4) AS INTEGER) * 12 +
+  CAST(substr(CAST("Sales Date" AS TEXT), 5, 2) AS INTEGER)
+)`;
 
 // CohortPeriod ("2024-Q2") -> the month index of that quarter's first month — used as the
 // cohort-level "launch" reference for ageMonthsNow, since individual lots within one quarter
@@ -252,24 +240,70 @@ function dominantFromCounts(counts) {
   return dominant;
 }
 
-function buildCohortsFromRows(rows) {
+// Suite-grouping key as a SQL expression, mirroring isSuiteGrouped/SUITE_GROUPED_TYPES: NULL
+// (its own "no suite data" bucket, same as the old JS suiteNo: null) unless the product type is
+// suite-grouped AND Suite No is actually populated for this row.
+const SUITE_KEY_EXPR = `(CASE WHEN TRIM("Material Type Desc.") IN ('${SUITE_GROUPED_TYPES.join("','")}')
+  THEN NULLIF(TRIM("Suite No"), '') ELSE NULL END)`;
+const COHORT_GROUP_SELECT = `
+  TRIM("Branch")              AS branch,
+  TRIM("Material Type Desc.") AS productType,
+  TRIM("Zone")                AS zone,
+  ${SUITE_KEY_EXPR}           AS suiteNo,
+  ${COHORT_PERIOD_EXPR}       AS cohortPeriod
+`;
+const COHORT_GROUP_BY = `branch, productType, zone, suiteNo, cohortPeriod`;
+
+// Replaces the old fetch-every-matching-row-then-group-in-JS approach with two GROUP BY
+// aggregate queries — SQLite returns one row per cohort (or per cohort+eyeLevel / cohort+month
+// for the two queries below) instead of one row per lot, so JS only ever materializes
+// O(cohorts) objects, not O(rows) — for master_stock's ~260k rows that's ~1,000 cohort objects
+// instead of ~260,000 row objects (see CLAUDE.md's stated principle — src/reader.js uses SQL
+// GROUP BY for the same reason).
+function buildCohortsFromSql(filters) {
+  const { where, params } = buildWhere(filters, [VALID_LOT_CREATE]);
+
+  // Grouping by cohort+eyeLevel (instead of just cohort) gets the per-eyeLevel unit totals
+  // dominantFromCounts needs for free, in the same query, rather than a separate round trip.
+  const totalsRows = getDb().prepare(`
+    SELECT
+      ${COHORT_GROUP_SELECT},
+      COALESCE(NULLIF(TRIM("Eye Level/Non Eye Level"), ''), 'Unknown') AS eyeLevel,
+      SUM("Total Stock Case")     AS totalUnits,
+      SUM("Total Sold Case")      AS soldUnits,
+      SUM("Total Balance Case")   AS balanceUnits,
+      SUM("Total Balance Amount") AS balanceValue,
+      SUM(CASE WHEN "Unit Price" > 0 THEN "Unit Price" ELSE 0 END) AS priceSum,
+      SUM(CASE WHEN "Unit Price" > 0 THEN 1 ELSE 0 END)            AS priceCount
+    FROM master_stock
+    ${where}
+    GROUP BY ${COHORT_GROUP_BY}, eyeLevel
+  `).all(...params);
+
+  // Sales Date carries a placeholder (= Lot Create On) on never-sold OPEN lots, so restricting to
+  // "Total Sold Case" > 0 excludes those automatically (mirrors the old per-row `if (totalSold >
+  // 0)` guard) — no separate NULL/blank check needed on top, same as the row-based version relied
+  // on parseYYYYMMDD succeeding for every real Lot Create On/Sales Date pair.
+  const soldByMonthRows = getDb().prepare(`
+    SELECT
+      ${COHORT_GROUP_SELECT},
+      (${SALES_MONTH_INDEX_EXPR} - ${LOT_MONTH_INDEX_EXPR}) AS monthsSinceLaunch,
+      SUM("Total Sold Case") AS sold
+    FROM master_stock
+    ${where} AND "Total Sold Case" > 0
+      AND (${SALES_MONTH_INDEX_EXPR} - ${LOT_MONTH_INDEX_EXPR}) >= 0
+    GROUP BY ${COHORT_GROUP_BY}, monthsSinceLaunch
+  `).all(...params);
+
+  const cohortKey = (r) => `${r.branch}|${r.productType}|${r.zone}|${r.suiteNo}|${r.cohortPeriod}`;
+
   const cohorts = new Map();
-  for (const r of rows) {
-    const created = parseYYYYMMDD(r.lotCreateOn);
-    if (!created) continue;
-    const cohortPeriod = cohortPeriodOf(created);
-    const suiteGrouped = isSuiteGrouped(r.productType);
-    // Rows with no Suite No (even for a suite-grouped product type — Niche is only 68.3%
-    // populated) fall into their own zone-level "no suite data" bucket (suiteNo: null) rather
-    // than being dropped, so nothing silently disappears from the table.
-    const suiteNo = suiteGrouped && r.suiteNo ? r.suiteNo : null;
-    const key = suiteGrouped
-      ? `${r.branch}|${r.productType}|${r.zone}|${suiteNo}|${cohortPeriod}`
-      : `${r.branch}|${r.productType}|${r.zone}|${cohortPeriod}`;
+  for (const r of totalsRows) {
+    const key = cohortKey(r);
     if (!cohorts.has(key)) {
       cohorts.set(key, {
         branch: r.branch, productType: r.productType, zone: r.zone,
-        suiteNo: suiteGrouped ? suiteNo : null, cohortPeriod,
+        suiteNo: r.suiteNo, cohortPeriod: r.cohortPeriod,
         totalUnits: 0, soldUnits: 0, balanceUnits: 0, balanceValue: 0,
         priceSum: 0, priceCount: 0,
         eyeLevelCounts: new Map(),
@@ -277,26 +311,18 @@ function buildCohortsFromRows(rows) {
       });
     }
     const c = cohorts.get(key);
-    const totalStock = Number(r.totalStock) || 0;
-    const totalSold = Number(r.totalSold) || 0;
-    const unitPrice = Number(r.unitPrice) || 0;
-
-    c.totalUnits += totalStock;
-    c.soldUnits += totalSold;
-    c.balanceUnits += Number(r.totalBalance) || 0;
-    c.balanceValue += Number(r.totalBalanceAmount) || 0;
-    if (unitPrice > 0) { c.priceSum += unitPrice; c.priceCount += 1; }
-
-    const eyeLevel = String(r.eyeLevel || '').trim() || 'Unknown';
-    c.eyeLevelCounts.set(eyeLevel, (c.eyeLevelCounts.get(eyeLevel) || 0) + totalStock);
-
-    if (totalSold > 0) {
-      const sold = parseYYYYMMDD(r.salesDate);
-      if (sold) {
-        const m = monthIndexOf(sold) - monthIndexOf(created);
-        if (m >= 0) c.soldByMonth.set(m, (c.soldByMonth.get(m) || 0) + totalSold);
-      }
-    }
+    c.totalUnits += r.totalUnits || 0;
+    c.soldUnits += r.soldUnits || 0;
+    c.balanceUnits += r.balanceUnits || 0;
+    c.balanceValue += r.balanceValue || 0;
+    c.priceSum += r.priceSum || 0;
+    c.priceCount += r.priceCount || 0;
+    c.eyeLevelCounts.set(r.eyeLevel, (c.eyeLevelCounts.get(r.eyeLevel) || 0) + (r.totalUnits || 0));
+  }
+  for (const r of soldByMonthRows) {
+    const c = cohorts.get(cohortKey(r));
+    if (!c) continue;
+    c.soldByMonth.set(r.monthsSinceLaunch, (c.soldByMonth.get(r.monthsSinceLaunch) || 0) + (r.sold || 0));
   }
 
   const nowMI = nowMonthIndex();
@@ -317,13 +343,13 @@ function buildCohortsFromRows(rows) {
   return list;
 }
 
-// Merges CohortPeriod-grained cohorts (buildCohortsFromRows' output) into one record per
+// Merges CohortPeriod-grained cohorts (buildCohortsFromSql' output) into one record per
 // Branch+ProductType+Zone (or +SuiteNo for SUITE_GROUPED_TYPES) — Newly Launched Zones &
 // Suites' grain, coarser than the Cohort Table's. A "launch" here means the group's OWN
 // earliest CohortPeriod, so soldByMonth from each sub-cohort is re-based onto that common
 // origin (offset by how many months later that sub-cohort's own quarter started) before being
 // summed, giving one coherent cumulative-sell-through curve for cohortStatusFlag/
-// computePeerStats to run on — the same shape a single buildCohortsFromRows cohort has, just
+// computePeerStats to run on — the same shape a single buildCohortsFromSql cohort has, just
 // spanning however many quarters this zone/suite has actually launched lots in.
 function buildZoneSuiteGroups(cohorts) {
   const groups = new Map();
@@ -386,7 +412,7 @@ function cumulativePctAt(cohort, m) {
 
 export function getLifecycleCurve(filters = {}) {
   const maxCohorts = Number(filters.maxCohorts) > 0 ? Number(filters.maxCohorts) : 8;
-  const cohorts = buildCohortsFromRows(fetchLifecycleRows(filters));
+  const cohorts = buildCohortsFromSql(filters);
 
   // Largest cohorts by unit count first, so the chart doesn't get overcrowded.
   cohorts.sort((a, b) => b.totalUnits - a.totalUnits);
@@ -562,15 +588,20 @@ export function getLifecycleCohortTable(filters = {}) {
   const ageMonths = resolveAgeMonths(filters.ageMonths);
   const { branch, productType, bigLotFilter } = filters;
   const preset = resolvePeerPreset(filters.peerPreset);
-  const cohorts = buildCohortsFromRows(fetchLifecycleRows({ branch, productType, bigLotFilter }));
 
   // Peer Benchmark always compares against the full, branch-unscoped set of cohorts (branch is
   // re-applied per-preset below, only for the "+ Same Branch" preset) sharing the same Product
   // Type — a genuine historical benchmark, not narrowed by whichever Branch the Cohort Table's
   // own filters currently show. Product Type and bigLotFilter are still honored (no reason to
   // pull types the user has excluded, and bigLotFilter is a real "exclude these lots from
-  // analysis" setting, not a display scope).
-  const peerUniverse = buildCohortsFromRows(fetchLifecycleRows({ productType, bigLotFilter }));
+  // analysis" setting, not a display scope). Fetched ONCE here — `cohorts` (the branch-scoped
+  // view the table itself renders) is then just an in-memory filter of this same list rather than
+  // a second SQL aggregation, since peerUniverse is always a superset of it.
+  const peerUniverse = buildCohortsFromSql({ productType, bigLotFilter });
+  const branchList = normalizedFilterList(branch);
+  const cohorts = branchList.length
+    ? peerUniverse.filter(c => matchesNormalizedList(c.branch, branchList))
+    : peerUniverse;
   const priceRangeBands = getPriceRangeBandsByProductType();
   const peerGroups = buildPeerGroups(peerUniverse, preset, priceRangeBands);
 
@@ -701,7 +732,7 @@ export function getLifecycleLevelBreakdown(filters = {}) {
   }
   // A single empty-string suiteNo means "the lots with no Suite No at all" — the leftover
   // bucket for a SUITE_GROUPED_TYPES cohort whose Suite No wasn't populated (see
-  // buildCohortsFromRows). buildWhere's normal IN-clause can't express "blank" (its FILTER_
+  // buildCohortsFromSql). buildWhere's normal IN-clause can't express "blank" (its FILTER_
   // COLUMNS convention treats an empty value as "no filter", not "filter for blank"), so this
   // is special-cased into its own SQL fragment instead of being routed through FILTER_COLUMNS.
   const suiteList = toArray(suiteNo);
@@ -749,11 +780,16 @@ export function getLifecycleNewZonesAndSuites(filters = {}) {
   const { branch, productType, bigLotFilter } = filters;
   const preset = resolvePeerPreset(filters.peerPreset);
 
-  const cohorts = buildCohortsFromRows(fetchLifecycleRows({ branch, productType, bigLotFilter }));
-  const groups = buildZoneSuiteGroups(cohorts).filter(g => g.ageMonthsNow <= ageMonths);
-
-  const peerCohorts = buildCohortsFromRows(fetchLifecycleRows({ productType, bigLotFilter }));
+  // Same "fetch the branch-unscoped peer universe once, derive the branch-scoped view by
+  // filtering it in JS" pattern as getLifecycleCohortTable — buildZoneSuiteGroups keys every
+  // group by branch already, so filtering post-grouping is equivalent to filtering pre-grouping.
+  const peerCohorts = buildCohortsFromSql({ productType, bigLotFilter });
   const peerUniverse = buildZoneSuiteGroups(peerCohorts);
+  const branchList = normalizedFilterList(branch);
+  const groups = (branchList.length
+    ? peerUniverse.filter(g => matchesNormalizedList(g.branch, branchList))
+    : peerUniverse
+  ).filter(g => g.ageMonthsNow <= ageMonths);
   const priceRangeBands = getPriceRangeBandsByProductType();
   const peerGroups = buildPeerGroups(peerUniverse, preset, priceRangeBands);
 
@@ -783,7 +819,7 @@ export function getLifecycleNewZonesAndSuites(filters = {}) {
 
 // Peer Benchmark transparency (item 2) — locates the exact cohort a Status Flag/Peer Comparison
 // badge belongs to (either a Cohort Table row, when cohortPeriod is given, or a Newly Launched
-// Zones & Suites row, when it's omitted — matching buildCohortsFromRows vs buildZoneSuiteGroups'
+// Zones & Suites row, when it's omitted — matching buildCohortsFromSql vs buildZoneSuiteGroups'
 // two grains) and returns its full peer group under the given preset: the plain-language group
 // definition, how many peers, this cohort's own vs. the peer average sell-through at its current
 // age, and the largest 5 peer cohorts actually used, so the number can be sanity-checked instead
@@ -797,8 +833,11 @@ export function getLifecyclePeerDetail(filters = {}) {
   const wantsBlankSuite = suiteList.length === 1 && suiteList[0] === '';
   const matchesSuite = (c) => wantsBlankSuite ? c.suiteNo === null : (suiteList.length ? c.suiteNo === suiteList[0] : true);
 
-  const ownCohorts = buildCohortsFromRows(fetchLifecycleRows({ branch: [branch], productType: [productType], bigLotFilter }));
-  const peerCohorts = buildCohortsFromRows(fetchLifecycleRows({ productType: [productType], bigLotFilter }));
+  const peerCohorts = buildCohortsFromSql({ productType: [productType], bigLotFilter });
+  const branchList = normalizedFilterList(branch);
+  const ownCohorts = branchList.length
+    ? peerCohorts.filter(c => matchesNormalizedList(c.branch, branchList))
+    : peerCohorts;
 
   let target, peerUniverse;
   if (cohortPeriod) {
@@ -887,6 +926,54 @@ export function getLifecycleAgentFocus(filters = {}) {
   };
 }
 
+// ── Short-lived response cache ──
+// cohort-table/new-zones/curve/agent-focus are the 4 endpoints the Product Lifecycle tab fires
+// concurrently via Promise.all on every tab open (see public/js/lifecycle.js), plus whatever
+// other users hit around the same time on the same filter view. A 90s TTL means repeat/
+// concurrent hits on an identical param set are served from memory instead of re-running a SQL
+// aggregation each — source data only reloads monthly (scripts/excel_to_sqlite.py), so 90s of
+// staleness is a non-issue. Keyed on the request body only (each route already segregates its
+// own cache by using its own key prefix). Pruned opportunistically past 200 entries rather than
+// on a timer, since the realistic filter-combination cardinality is small and bounded.
+const CACHE_TTL_MS = 90_000;
+const CACHE_PRUNE_THRESHOLD = 200;
+const responseCache = new Map();
+
+function cacheKey(route, body) {
+  const sortedEntries = Object.keys(body || {}).sort().map(k => [k, body[k]]);
+  return `${route}:${JSON.stringify(sortedEntries)}`;
+}
+
+function setCached(key, data) {
+  if (responseCache.size > CACHE_PRUNE_THRESHOLD) {
+    const now = Date.now();
+    for (const [k, v] of responseCache) {
+      if (v.expiresAt <= now) responseCache.delete(k);
+    }
+  }
+  responseCache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+}
+
+function cachedHandler(route, computeFn) {
+  return (req, res) => {
+    try {
+      const body = req.body || {};
+      const key = cacheKey(route, body);
+      const cached = responseCache.get(key);
+      if (cached && cached.expiresAt > Date.now()) {
+        res.json(cached.data);
+        return;
+      }
+      const data = computeFn(body);
+      setCached(key, data);
+      res.json(data);
+    } catch (err) {
+      console.error(`Lifecycle ${route} error:`, err.message);
+      res.status(500).json({ error: err.message });
+    }
+  };
+}
+
 const router = Router();
 
 router.post('/filters', (req, res) => {
@@ -907,23 +994,9 @@ router.post('/overview', (req, res) => {
   }
 });
 
-router.post('/curve', (req, res) => {
-  try {
-    res.json(getLifecycleCurve(req.body || {}));
-  } catch (err) {
-    console.error('Lifecycle curve error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+router.post('/curve', cachedHandler('curve', getLifecycleCurve));
 
-router.post('/cohort-table', (req, res) => {
-  try {
-    res.json(getLifecycleCohortTable(req.body || {}));
-  } catch (err) {
-    console.error('Lifecycle cohort-table error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+router.post('/cohort-table', cachedHandler('cohort-table', getLifecycleCohortTable));
 
 router.post('/suite-breakdown', (req, res) => {
   try {
@@ -943,14 +1016,7 @@ router.post('/level-breakdown', (req, res) => {
   }
 });
 
-router.post('/new-zones', (req, res) => {
-  try {
-    res.json(getLifecycleNewZonesAndSuites(req.body || {}));
-  } catch (err) {
-    console.error('Lifecycle new-zones error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+router.post('/new-zones', cachedHandler('new-zones', getLifecycleNewZonesAndSuites));
 
 router.post('/peer-detail', (req, res) => {
   try {
@@ -961,13 +1027,6 @@ router.post('/peer-detail', (req, res) => {
   }
 });
 
-router.post('/agent-focus', (req, res) => {
-  try {
-    res.json(getLifecycleAgentFocus(req.body || {}));
-  } catch (err) {
-    console.error('Lifecycle agent-focus error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+router.post('/agent-focus', cachedHandler('agent-focus', getLifecycleAgentFocus));
 
 export default router;
