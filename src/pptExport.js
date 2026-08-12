@@ -9,6 +9,7 @@ import {
   getPriceRangeSummary,
   getStatusBreakdown,
 } from './reader.js';
+import { stripProductPrefix } from './format.js';
 
 // Colours
 const NAVY   = '1A2C5B';
@@ -191,7 +192,7 @@ function addProductSlide(pptx) {
       const vColor   = p.sellThrough >= 80 ? GREEN
                      : p.sellThrough >= 60 ? AMBER : RED;
       return [
-        p.product,
+        stripProductPrefix(p.product),
         num(p.totalStock),
         num(p.totalSold),
         num(p.totalBalance),
@@ -212,7 +213,7 @@ function addProductSlide(pptx) {
   // Horizontal bar chart
   slide.addChart('bar', [{
     name: 'Sell-through %',
-    labels: products.map(p => p.product),
+    labels: products.map(p => stripProductPrefix(p.product)),
     values: products.map(p => parseFloat(p.sellThrough.toFixed(1))),
   }], {
     x: 0.3, y: 4.65, w: 9.4, h: 2.5,
@@ -281,7 +282,7 @@ function addMatrixSlide(pptx) {
 
   const header = [
     { text: 'Branch', options: { bold: true, color: WHITE, fill: { color: NAVY } } },
-    ...products.map(p => ({ text: p.replace('NV ', ''), options: { bold: true, color: WHITE, fill: { color: NAVY }, fontSize: 7 } })),
+    ...products.map(p => ({ text: stripProductPrefix(p), options: { bold: true, color: WHITE, fill: { color: NAVY }, fontSize: 7 } })),
   ];
 
   const dataRows = branches.map(b => [
@@ -326,7 +327,7 @@ function addAgedStockSlide(pptx) {
     ],
     ...aged.map(r => [
       r.branch,
-      r.product,
+      stripProductPrefix(r.product),
       num(r.balance),
       myr(r.value),
       r.agedays + 'd',
@@ -436,7 +437,7 @@ Overview: Total Stock=${ov.totalStock}, Sold=${ov.totalSold}, Balance=${ov.total
 
 Branches (sell-through %): ${branches.map(b => `${b.branch} ${b.sellThrough.toFixed(1)}%`).join(', ')}
 
-Products (sell-through %): ${products.map(p => `${p.product} ${p.sellThrough.toFixed(1)}%`).join(', ')}
+Products (sell-through %): ${products.map(p => `${stripProductPrefix(p.product)} ${p.sellThrough.toFixed(1)}%`).join(', ')}
 
 BD Focus top priorities: ${bd.slice(0, 3).map(b => `${b.branch} (${b.priority}, Balance=${b.totalBalance})`).join(', ')}
 `.trim();

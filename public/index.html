@@ -57,6 +57,7 @@
     <button class="tab" data-tab="pricing">Pricing Intelligence</button>
     <button class="tab" data-tab="velocity">Sales Velocity</button>
     <button class="tab" data-tab="lifecycle">Product Lifecycle</button>
+    <button class="tab" data-tab="attributes">Product Attributes</button>
   </div>
 
   <main class="main-content">
@@ -69,6 +70,34 @@
 
     <!-- ── TAB: Overview ── -->
     <section class="tab-panel active" id="tab-overview">
+
+      <!-- Monthly Trend Summary — compact glance, no filters/drill-down (see monthly_snapshots) -->
+      <div class="monthly-trend-block">
+        <div class="chart-card chart-card--wide">
+          <h3 class="chart-title">Monthly Trend — Sell-Through % &amp; Balance Value</h3>
+          <div class="chart-wrap chart-wrap--trend">
+            <canvas id="chartMonthlyTrend"></canvas>
+          </div>
+        </div>
+        <div class="table-card">
+          <h3 class="table-title">Monthly Trend Detail</h3>
+          <div class="table-scroll">
+            <table id="tableMonthlyTrend">
+              <thead>
+                <tr>
+                  <th>Month</th>
+                  <th>Total Stock</th>
+                  <th>Sold</th>
+                  <th>Balance</th>
+                  <th>Sell-Through %</th>
+                  <th>Balance Value</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
 
       <!-- KPI Cards -->
       <div class="kpi-grid" id="kpiGrid">
@@ -947,12 +976,353 @@
       </div>
     </section>
 
+    <!-- ── TAB: Product Attributes ── -->
+    <section class="tab-panel" id="tab-attributes">
+
+      <!-- Section 1: Zone Tier Analysis -->
+      <div class="table-card">
+        <h3 class="table-title">Zone Tier Analysis</h3>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrTierBranch">Branch</label>
+            <div class="ms" id="attrTierBranch"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrTierProductType">Product Type</label>
+            <div class="ms" id="attrTierProductType"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrTierZone">Zone</label>
+            <div class="ms" id="attrTierZone"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrTierSuite">Suite No</label>
+            <div class="ms" id="attrTierSuite"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrTierLotType">Lot Type</label>
+            <div class="ms" id="attrTierLotType"></div>
+          </div>
+          <button class="btn-report" id="btnAttrTierSearch" onclick="renderZoneTierSection()">
+            <span>&#128269;</span> Search
+          </button>
+          <button class="btn-report" onclick="exportZoneTiersExcel()">
+            <span>&#11015;</span> Export to Excel
+          </button>
+        </div>
+        <p class="lot-filter-help">Expected Tier comes from the owner-curated Attribute Registry below (ground
+          truth), not a computed price ranking. Defaults to NV Niche, since tiering is most meaningful there, but
+          works for any product type with Zone data. Only zones with 50+ units are shown, to avoid noisy tiny
+          samples. Select a Suite No to compare at suite granularity instead of whole-zone. Price Alignment compares
+          a zone/suite's actual average price against other zones/suites sharing the same Branch, Era, and Expected
+          Tier. Selecting a single Burial Plot Lot Type of Super Family or Royal Family applies the universal
+          High-tier rule instead of a zone lookup. Use the Attribute Registry section below to add or edit ground
+          truth for zones not yet covered.</p>
+        <div class="drilldown-toolbar" id="attrTierToolbar"></div>
+        <div class="table-scroll">
+          <table id="tableAttrTiers">
+            <thead><tr id="attrTiersHeadRow"></tr></thead>
+            <tbody id="attrTiersBody">
+              <tr><td style="text-align:center;color:var(--muted)">Click Search to load zone tiers.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Section 1b: Zone/Suite/Lot-Type Attribute Registry -->
+      <div class="table-card">
+        <h3 class="table-title">Zone/Suite/Lot-Type Attribute Registry</h3>
+        <p class="lot-filter-help" style="border-top:none;padding-top:0;">Owner-curated ground truth backing
+          Expected Tier above — one row per Branch+Zone (or Branch+Zone+Suite) or per universal Lot Type rule.
+          Add or edit rows here to fill gaps over time.</p>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrRegBranchFilter">Branch</label>
+            <select class="branch-select" id="attrRegBranchFilter"><option value="">All branches</option></select>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrRegProductTypeFilter">Product Type</label>
+            <select class="branch-select" id="attrRegProductTypeFilter"><option value="">All product types</option></select>
+          </div>
+          <button class="btn-report" id="btnAttrRegRefresh" onclick="renderAttrRegistrySection()">
+            <span>&#128269;</span> Refresh
+          </button>
+          <button class="btn-report" id="btnAttrRegAdd" onclick="openAttrRegistryModal()">
+            <span>&#10133;</span> Add Row
+          </button>
+        </div>
+        <div class="drilldown-toolbar" id="attrRegistryToolbar"></div>
+        <div class="table-scroll">
+          <table id="tableAttrRegistry" class="sticky-actions">
+            <thead>
+              <tr>
+                <th>Branch</th><th>Zone</th><th>Suite No</th><th>Lot Type</th><th>Product Type</th><th>Tier</th><th>Era</th>
+                <th>Religion</th><th>Walkway Width</th><th>Walkway Proximity</th>
+                <th>Gazebo</th><th>Elevation</th><th>Notes</th><th>Updated</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="attrRegistryBody">
+              <tr><td colspan="15" style="text-align:center;color:var(--muted)">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Attribute Registry: Add/Edit modal -->
+      <div class="velo-modal-overlay" id="attrRegistryModal" hidden>
+        <div class="velo-modal-box">
+          <h3 class="table-title" id="attrRegModalTitle">Add Attribute Row</h3>
+          <div id="attrRegWarning" class="lot-filter-help" style="display:none;border-top:none;padding-top:0;color:var(--amber);"></div>
+          <input type="hidden" id="attrRegId">
+          <div class="lot-filter-row">
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="attrRegBranch">Branch *</label>
+              <input class="branch-select" id="attrRegBranch" list="attrRegBranchList" placeholder="e.g. KL, or ALL">
+              <datalist id="attrRegBranchList"></datalist>
+            </div>
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="attrRegZone">Zone *</label>
+              <input class="branch-select" id="attrRegZone" placeholder="e.g. MC1, BK- (prefix), or ALL">
+            </div>
+            <div class="lot-filter-field" data-attr-field="suite">
+              <label class="lot-filter-label" for="attrRegSuite">Suite No</label>
+              <input class="branch-select" id="attrRegSuite" placeholder="optional — blank = whole zone">
+            </div>
+            <div class="lot-filter-field" data-attr-field="flat">
+              <label class="lot-filter-label" for="attrRegLotType">Lot Type</label>
+              <input class="branch-select" id="attrRegLotType" list="attrRegLotTypeList" placeholder="optional — Burial Plot lot types, or Mixed">
+              <datalist id="attrRegLotTypeList"></datalist>
+            </div>
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="attrRegProductType">Product Type</label>
+              <input class="branch-select" id="attrRegProductType" list="attrRegProductTypeList" placeholder="e.g. NV Niche, or blank = universal">
+              <datalist id="attrRegProductTypeList"></datalist>
+            </div>
+          </div>
+          <div class="lot-filter-row">
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="attrRegTier">Intended Tier</label>
+              <select class="branch-select" id="attrRegTier">
+                <option value="">Not Set</option><option value="High">High</option>
+                <option value="Mid">Mid</option><option value="Low">Low</option>
+              </select>
+            </div>
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="attrRegEra">Era</label>
+              <select class="branch-select" id="attrRegEra">
+                <option value="">Not Set</option><option value="Legacy">Legacy</option><option value="Modern">Modern</option>
+              </select>
+            </div>
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="attrRegReligion">Religion Type</label>
+              <select class="branch-select" id="attrRegReligion">
+                <option value="">Not Set</option><option value="Buddhist-Taoist">Buddhist-Taoist</option>
+                <option value="Christian">Christian</option><option value="Free Thinker">Free Thinker</option>
+                <option value="Mixed">Mixed</option><option value="Other">Other</option>
+              </select>
+            </div>
+          </div>
+          <div class="lot-filter-row" data-attr-field="flat">
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="attrRegWalkwayWidth">Walkway Width</label>
+              <select class="branch-select" id="attrRegWalkwayWidth">
+                <option value="">Not Set</option><option value="Wide">Wide</option>
+                <option value="Standard">Standard</option><option value="Narrow">Narrow</option>
+              </select>
+            </div>
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="attrRegWalkwayProximity">Walkway Proximity</label>
+              <select class="branch-select" id="attrRegWalkwayProximity">
+                <option value="">Not Set</option><option value="Center">Center</option>
+                <option value="Side">Side</option><option value="Interior">Interior</option>
+              </select>
+            </div>
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="attrRegGazebo">Gazebo Proximity</label>
+              <select class="branch-select" id="attrRegGazebo">
+                <option value="">Not Set</option><option value="Yes">Yes</option><option value="No">No</option>
+              </select>
+            </div>
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="attrRegElevation">Elevation Tier</label>
+              <select class="branch-select" id="attrRegElevation">
+                <option value="">Not Set</option><option value="High">High</option>
+                <option value="Mid">Mid</option><option value="Low">Low</option>
+              </select>
+            </div>
+          </div>
+          <div class="lot-filter-row">
+            <div class="lot-filter-field" style="flex:1 1 100%;">
+              <label class="lot-filter-label" for="attrRegNotes">Notes</label>
+              <input class="branch-select" id="attrRegNotes" style="width:100%;" placeholder="optional">
+            </div>
+          </div>
+          <div class="velo-modal-actions">
+            <button type="button" class="btn-report" id="btnAttrRegCancel">Cancel</button>
+            <button type="button" class="btn-report" id="btnAttrRegSave">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 2: Level Size & Sell-Through Analysis -->
+      <div class="table-card">
+        <h3 class="table-title">Level Size &amp; Sell-Through Analysis</h3>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrLevelBranch">Branch</label>
+            <div class="ms" id="attrLevelBranch"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrLevelProductType">Product Type</label>
+            <div class="ms" id="attrLevelProductType"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrLevelZone">Zone</label>
+            <div class="ms" id="attrLevelZone"></div>
+          </div>
+          <button class="btn-report" id="btnAttrLevelSearch" onclick="renderLevelAnalysisSection()">
+            <span>&#128269;</span> Search
+          </button>
+        </div>
+        <p class="lot-filter-help" id="attrLevelStructuredNote">Product Type here is limited to structured types
+          (Niche, Pedestal, Pet Niche, EBL, Baby Paradise) — flat-land types have no Level No to analyze.</p>
+
+        <div class="chart-wrap" style="margin-bottom:1rem;">
+          <canvas id="chartAttrLevel"></canvas>
+        </div>
+
+        <details class="status-flag-legend">
+          <summary>What does Compensation Status mean?</summary>
+          <div class="status-flag-legend-body">
+            <p>For levels made physically larger to offset lower demand (e.g. positioned near the floor or ceiling),
+              <strong>Insufficient</strong> means the size increase has not fully compensated — sell-through remains
+              below what similarly-priced standard-size levels achieve. <strong>Sufficient</strong> means it has.
+              Compensation Status only applies to levels flagged <strong>Enlarged</strong> (their most common Lot
+              Dimension is physically larger than the product type's overall standard dimension); Standard-size
+              levels show N/A.</p>
+          </div>
+        </details>
+
+        <div class="table-scroll">
+          <table id="tableAttrLevel">
+            <thead>
+              <tr>
+                <th>Level</th><th>Size Category</th><th>Dimension</th><th>Avg Price</th>
+                <th>Sell-Through %</th><th>Compensation Status</th><th>Balance Value</th><th>Units</th>
+              </tr>
+            </thead>
+            <tbody id="attrLevelBody">
+              <tr><td colspan="8" style="text-align:center;color:var(--muted)">Click Search to load level analysis.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Section 3: Dimension Consistency Check -->
+      <div class="table-card">
+        <h3 class="table-title">Dimension Consistency Check</h3>
+        <p class="lot-filter-help" style="border-top:none;padding-top:0;">Shows cases where lots of the same product
+          and lot type, launched within the last 3 years in the same zone, were built to different physical
+          dimensions than the established standard — a possible contributor to inconsistent sell-through.</p>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrDimBranch">Branch</label>
+            <div class="ms" id="attrDimBranch"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrDimProductType">Product Type</label>
+            <div class="ms" id="attrDimProductType"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrDimLotType">Lot Type</label>
+            <div class="ms" id="attrDimLotType"></div>
+          </div>
+          <button class="btn-report" id="btnAttrDimSearch" onclick="renderDimensionConsistencySection()">
+            <span>&#128269;</span> Search
+          </button>
+          <button class="btn-report" onclick="exportDimensionConsistencyExcel()">
+            <span>&#11015;</span> Export to Excel
+          </button>
+        </div>
+        <div class="drilldown-toolbar" id="attrDimToolbar"></div>
+        <div class="table-scroll">
+          <table id="tableAttrDim">
+            <thead><tr id="attrDimHeadRow"></tr></thead>
+            <tbody id="attrDimBody">
+              <tr><td style="text-align:center;color:var(--muted)">Click Search to load dimension mismatches.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Section 4: Positional Signals (Beta) -->
+      <div class="table-card">
+        <h3 class="table-title">Positional Signals (Beta) — Wide Walkway / Gazebo &amp; Center Proximity</h3>
+        <div class="beta-info-banner">
+          <span class="beta-info-banner-icon">&#9888;</span>
+          <span>These signals are inferred from lot-numbering patterns, not directly measured. Please review and
+            confirm or reject each candidate — unconfirmed signals are not used elsewhere in the app.</span>
+        </div>
+        <div class="status-flag-summary" id="attrSignalSummaryCards"></div>
+        <div class="lot-filter-row">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrSignalBranch">Branch</label>
+            <div class="ms" id="attrSignalBranch"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrSignalZone">Zone</label>
+            <div class="ms" id="attrSignalZone"></div>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrSignalTypeFilter">Signal Type</label>
+            <select class="branch-select" id="attrSignalTypeFilter">
+              <option value="">All signal types</option>
+              <option value="Wide Walkway">Wide Walkway</option>
+              <option value="Gazebo/Center Proximity">Gazebo/Center Proximity</option>
+            </select>
+          </div>
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="attrSignalStatusFilter">Review Status</label>
+            <select class="branch-select" id="attrSignalStatusFilter">
+              <option value="Pending" selected>Pending</option>
+              <option value="Confirmed">Confirmed</option>
+              <option value="Rejected">Rejected</option>
+              <option value="">All statuses</option>
+            </select>
+          </div>
+          <button class="btn-report" id="btnAttrSignalSearch" onclick="renderPlotSignalsSection()">
+            <span>&#128269;</span> Search
+          </button>
+          <button class="btn-report" onclick="exportPlotSignalsExcel()">
+            <span>&#11015;</span> Export to Excel
+          </button>
+        </div>
+        <div class="drilldown-toolbar" id="attrSignalToolbar"></div>
+        <div class="table-scroll">
+          <table id="tableAttrSignals" class="sticky-actions">
+            <thead>
+              <tr>
+                <th>Material No</th><th>Branch</th><th>Zone</th><th>Row</th><th>Signal Type</th>
+                <th>Evidence</th><th>Current Price</th><th>Sell-Through %</th><th>Review Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="attrSignalBody">
+              <tr><td colspan="10" style="text-align:center;color:var(--muted)">Click Search to load positional signal candidates.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+
   </main>
 
+  <script src="/js/common.js"></script>
   <script src="/js/dashboard.js"></script>
   <script src="/js/query.js"></script>
   <script src="/js/velocity.js"></script>
   <script src="/js/lifecycle.js"></script>
+  <script src="/js/attributes.js"></script>
 
   <script>
     // Tab switching
@@ -965,6 +1335,7 @@
         if (btn.dataset.tab === 'pricing' && typeof onPricingTabActivated === 'function') onPricingTabActivated();
         if (btn.dataset.tab === 'velocity' && typeof onVelocityTabActivated === 'function') onVelocityTabActivated();
         if (btn.dataset.tab === 'lifecycle' && typeof onLifecycleTabActivated === 'function') onLifecycleTabActivated();
+        if (btn.dataset.tab === 'attributes' && typeof onAttributesTabActivated === 'function') onAttributesTabActivated();
       });
     });
 
