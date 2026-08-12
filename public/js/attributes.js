@@ -886,6 +886,38 @@ let attrSignalPage = 1;
 const ATTR_SIGNAL_TYPE_BADGE_CLASS = { 'Wide Walkway': 'badge--blue', 'Gazebo/Center Proximity': 'badge--navy' };
 const ATTR_SIGNAL_STATUS_BADGE_CLASS = { Pending: 'badge--grey', Confirmed: 'badge--green', Rejected: 'badge--red' };
 
+// Defaults to Pattern: an analysis of the 895 Gazebo/Center Proximity candidates found just 135
+// distinct gap patterns, with the top 11 (10+ occurrences each) covering 545 of them (61%) — a
+// single pattern (698→818) alone accounts for 381. Reviewing those one by one would mean
+// re-deciding the same physical-layout judgment hundreds of times.
+let attrSignalReviewMode = 'pattern'; // 'pattern' | 'individual'
+let lastAttrSignalPatterns = [];
+const ATTR_SIGNAL_PATTERN_PAGE_SIZES = [10, 25];
+let attrSignalPatternPageSize = 10;
+let attrSignalPatternPage = 1;
+
+// Mirrors extractGapPattern in routes/attributes.js — Gazebo/Center Proximity evidence always
+// embeds its gap boundary as "{before}→{after}", in both the step-pattern and fallback-heuristic
+// evidence forms; Wide Walkway evidence never matches (reviewed individually only).
+function extractGapPatternJS(evidence) {
+  const m = String(evidence || '').match(/(\d+)→(\d+)/);
+  return m ? `${m[1]}→${m[2]}` : null;
+}
+
+// Groups rows into pattern buckets. Gazebo/Center Proximity rows sharing the same gap boundary
+// collapse into one bucket (patternKey = "398→608"); anything without a parseable pattern (Wide
+// Walkway, or the rare unparseable case) becomes its own singleton bucket keyed by material_no,
+// so nothing is ever silently excluded from Pattern mode — it just isn't groupable.
+function groupSignalsByPattern(rows) {
+  const groups = new Map();
+  for (const r of rows) {
+    const key = extractGapPatternJS(r.evidence) ?? `__single__${r.material_no}`;
+    if (!groups.has(key)) groups.set(key, { patternKey: key, isGroupable: !key.startsWith('__single__'), members: [] });
+    groups.get(key).members.push(r);
+  }
+  return [...groups.values()].sort((a, b) => b.members.length - a.members.length);
+}
+
 // Branch/Zone options are derived from whatever's actually in plot_position_signals (a single
 // unfiltered fetch on tab init), rather than from master_stock's full filter cascade — this
 // section only ever shows Burial Plot zones that produced a candidate, which is a much smaller,
@@ -976,9 +1008,161 @@ function renderAttrSignalBody() {
   }).join('');
 }
 
+// ── Pattern mode rendering ──
+
+function renderAttrSignalPatternToolbar(totalCount, totalPages) {
+  const el = document.getElementById('attrSignalPatternToolbar');
+  if (!el) return;
+  if (!totalCount) { el.innerHTML = ''; return; }
+  const rangeStart = (attrSignalPatternPage - 1) * attrSignalPatternPageSize + 1;
+  const rangeEnd = Math.min(attrSignalPatternPage * attrSignalPatternPageSize, totalCount);
+  el.innerHTML = `
+    <div class="drilldown-toolbar-count">Showing ${fmt(rangeStart)}–${fmt(rangeEnd)} of ${fmt(totalCount)} patterns</div>
+    <div class="drilldown-toolbar-actions">
+      <div class="drill-page-size">
+        ${ATTR_SIGNAL_PATTERN_PAGE_SIZES.map(n => `<button type="button" class="drill-page-btn${attrSignalPatternPageSize === n ? ' active' : ''}" data-attr-signal-pattern-page="${n}">${n}</button>`).join('')}
+      </div>
+      <div class="drill-page-nav">
+        <button type="button" class="drill-page-nav-btn" data-attr-signal-pattern-nav="prev" ${attrSignalPatternPage <= 1 ? 'disabled' : ''}>&laquo; Previous</button>
+        <span class="drill-page-nav-indicator">Page ${attrSignalPatternPage} of ${totalPages}</span>
+        <button type="button" class="drill-page-nav-btn" data-attr-signal-pattern-nav="next" ${attrSignalPatternPage >= totalPages ? 'disabled' : ''}>Next &raquo;</button>
+      </div>
+    </div>`;
+}
+
+function renderAttrSignalStatusBreakdown(members) {
+  const counts = { Pending: 0, Confirmed: 0, Rejected: 0 };
+  for (const m of members) if (counts[m.review_status] !== undefined) counts[m.review_status]++;
+  return ['Pending', 'Confirmed', 'Rejected']
+    .filter(s => counts[s] > 0)
+    .map(s => `<span class="badge ${ATTR_SIGNAL_STATUS_BADGE_CLASS[s]}">${counts[s]} ${s}</span>`)
+    .join(' ');
+}
+
+// One member-table row, shared between the accordion detail (Pattern mode) and Individual mode
+// — same columns minus the ones already shown at the group level (Pattern/evidence there).
+function renderAttrSignalMemberRow(r) {
+  const isPending = r.review_status === 'Pending';
+  return `<tr>
+    <td>${escapeHtml(r.material_no)}</td>
+    <td>${escapeHtml(r.branch || '—')}</td>
+    <td>${escapeHtml(r.zone || '—')}</td>
+    <td>${escapeHtml(r.row || '—')}</td>
+    <td>${myr(r.current_price)}</td>
+    <td>${pct(r.current_sell_through_pct)}</td>
+    <td><span class="badge ${ATTR_SIGNAL_STATUS_BADGE_CLASS[r.review_status] || 'badge--grey'}">${escapeHtml(r.review_status)}</span></td>
+    <td style="white-space:nowrap;">
+      <button type="button" class="btn-view-lots" data-action="confirm-attr-signal" data-id="${r.id}" ${isPending ? '' : 'disabled'}>Confirm</button>
+      <button type="button" class="btn-view-lots" data-action="reject-attr-signal" data-id="${r.id}" ${isPending ? '' : 'disabled'}>Reject</button>
+    </td>
+  </tr>`;
+}
+
+function renderAttrSignalPatternBody() {
+  const tbody = document.getElementById('attrSignalPatternBody');
+  if (!tbody) return;
+  const totalCount = lastAttrSignalPatterns.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / attrSignalPatternPageSize));
+  if (attrSignalPatternPage > totalPages) attrSignalPatternPage = totalPages;
+  if (attrSignalPatternPage < 1) attrSignalPatternPage = 1;
+
+  renderAttrSignalPatternToolbar(totalCount, totalPages);
+
+  if (!totalCount) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted)">No candidates match these filters.</td></tr>`;
+    return;
+  }
+  const start = (attrSignalPatternPage - 1) * attrSignalPatternPageSize;
+  const groups = lastAttrSignalPatterns.slice(start, start + attrSignalPatternPageSize);
+
+  tbody.innerHTML = groups.map(g => {
+    const pendingCount = g.members.filter(m => m.review_status === 'Pending').length;
+    const zoneRowCount = new Set(g.members.map(m => `${m.branch}|${m.zone}|${m.row}`)).size;
+    const patternLabel = g.isGroupable
+      ? escapeHtml(g.patternKey)
+      : `<em>Individual — ${escapeHtml(g.members[0].signal_type)}</em>`;
+    const bulkActions = g.isGroupable
+      ? `<button type="button" class="btn-view-lots" data-action="confirm-attr-signal-pattern" data-pattern="${escapeHtml(g.patternKey)}" ${pendingCount ? '' : 'disabled'}>Confirm All</button>
+         <button type="button" class="btn-view-lots" data-action="reject-attr-signal-pattern" data-pattern="${escapeHtml(g.patternKey)}" ${pendingCount ? '' : 'disabled'}>Reject All</button>`
+      : `<button type="button" class="btn-view-lots" data-action="confirm-attr-signal" data-id="${g.members[0].id}" ${pendingCount ? '' : 'disabled'}>Confirm</button>
+         <button type="button" class="btn-view-lots" data-action="reject-attr-signal" data-id="${g.members[0].id}" ${pendingCount ? '' : 'disabled'}>Reject</button>`;
+    const viewToggle = `<button type="button" class="btn-view-lots" data-action="toggle-attr-signal-pattern-members" data-pattern="${escapeHtml(g.patternKey)}">View Lots</button>`;
+
+    return `<tr class="accordion-row" data-pattern-key="${escapeHtml(g.patternKey)}">
+      <td>${patternLabel}</td>
+      <td>${fmt(g.members.length)}</td>
+      <td>${fmt(zoneRowCount)} zone/row${zoneRowCount === 1 ? '' : 's'}</td>
+      <td>${escapeHtml(g.members[0].evidence || '—')}</td>
+      <td style="white-space:nowrap;">${renderAttrSignalStatusBreakdown(g.members)}</td>
+      <td style="white-space:nowrap;">${bulkActions} ${viewToggle}</td>
+    </tr>
+    <tr class="accordion-detail" style="display:none"><td colspan="6"><div class="drilldown-inline" data-drill-content></div></td></tr>`;
+  }).join('');
+}
+
+function toggleAttrSignalPatternMembers(btn) {
+  const detailRow = btn.closest('tr')?.nextElementSibling;
+  if (!detailRow || !detailRow.classList.contains('accordion-detail')) return;
+  const isOpen = detailRow.style.display !== 'none';
+  if (isOpen) { detailRow.style.display = 'none'; btn.textContent = 'View Lots'; return; }
+
+  detailRow.style.display = '';
+  btn.textContent = 'Hide Lots';
+  const content = detailRow.querySelector('[data-drill-content]');
+  if (content.dataset.loaded === 'true') return;
+
+  const patternKey = btn.dataset.pattern;
+  const group = lastAttrSignalPatterns.find(g => g.patternKey === patternKey);
+  content.innerHTML = !group ? '<div class="drilldown-empty">Not found.</div>' : `
+    <div class="table-scroll">
+      <table class="sticky-actions">
+        <thead><tr>
+          <th>Material No</th><th>Branch</th><th>Zone</th><th>Row</th>
+          <th>Current Price</th><th>Sell-Through %</th><th>Review Status</th><th></th>
+        </tr></thead>
+        <tbody>${group.members.map(renderAttrSignalMemberRow).join('')}</tbody>
+      </table>
+    </div>`;
+  content.dataset.loaded = 'true';
+}
+
+async function bulkReviewAttrSignalPattern(patternKey, reviewStatus) {
+  try {
+    const res = await fetch('/api/attributes/plot-signals/review-pattern', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ patternKey, reviewStatus }),
+    });
+    if (res.status === 401 || res.redirected || res.url.includes('/login')) throw new Error('SESSION_EXPIRED');
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    await renderPlotSignalsSection();
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
+    console.error('[attributes] bulkReviewAttrSignalPattern failed:', err);
+    alert('Failed to bulk update review status: ' + err.message);
+  }
+}
+
+// ── Mode toggle ──
+
+function setAttrSignalReviewMode(mode) {
+  attrSignalReviewMode = mode;
+  document.querySelectorAll('#attrSignalReviewModeToggle .subtab').forEach(b => {
+    b.classList.toggle('active', b.dataset.reviewMode === mode);
+  });
+  const individualView = document.getElementById('attrSignalIndividualView');
+  const patternView = document.getElementById('attrSignalPatternView');
+  if (individualView) individualView.style.display = mode === 'individual' ? '' : 'none';
+  if (patternView) patternView.style.display = mode === 'pattern' ? '' : 'none';
+  if (mode === 'pattern') renderAttrSignalPatternBody(); else renderAttrSignalBody();
+}
+
 async function renderPlotSignalsSection() {
   const tbody = document.getElementById('attrSignalBody');
   if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
+  const patternTbody = document.getElementById('attrSignalPatternBody');
+  if (patternTbody) patternTbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
   try {
     const filters = {
       branch: attrSignalFiltersUI.branch.getValues(),
@@ -989,13 +1173,17 @@ async function renderPlotSignalsSection() {
     const { rows, summary } = await fetchAttributesJSON('plot-signals', filters);
     lastAttrSignalRows = rows || [];
     lastAttrSignalSummary = summary || null;
+    lastAttrSignalPatterns = groupSignalsByPattern(lastAttrSignalRows);
     attrSignalPage = 1;
+    attrSignalPatternPage = 1;
     renderAttrSignalSummaryCards();
     renderAttrSignalBody();
+    renderAttrSignalPatternBody();
   } catch (err) {
     if (err.message === 'SESSION_EXPIRED') { showSessionExpired(); return; }
     console.error('[attributes] renderPlotSignalsSection failed:', err);
     if (tbody) tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--red)">Error: ${err.message}</td></tr>`;
+    if (patternTbody) patternTbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--red)">Error: ${err.message}</td></tr>`;
   }
 }
 
@@ -1111,6 +1299,33 @@ function initAttributesTabEvents() {
 
     const signalRejectBtn = e.target.closest('button[data-action="reject-attr-signal"]');
     if (signalRejectBtn) { reviewAttrSignal(signalRejectBtn.dataset.id, 'Rejected'); return; }
+
+    const signalPatternPageBtn = e.target.closest('button[data-attr-signal-pattern-page]');
+    if (signalPatternPageBtn) {
+      attrSignalPatternPageSize = Number(signalPatternPageBtn.dataset.attrSignalPatternPage);
+      attrSignalPatternPage = 1;
+      renderAttrSignalPatternBody();
+      return;
+    }
+
+    const signalPatternNavBtn = e.target.closest('button[data-attr-signal-pattern-nav]');
+    if (signalPatternNavBtn) {
+      attrSignalPatternPage += signalPatternNavBtn.dataset.attrSignalPatternNav === 'prev' ? -1 : 1;
+      renderAttrSignalPatternBody();
+      return;
+    }
+
+    const signalPatternConfirmBtn = e.target.closest('button[data-action="confirm-attr-signal-pattern"]');
+    if (signalPatternConfirmBtn) { bulkReviewAttrSignalPattern(signalPatternConfirmBtn.dataset.pattern, 'Confirmed'); return; }
+
+    const signalPatternRejectBtn = e.target.closest('button[data-action="reject-attr-signal-pattern"]');
+    if (signalPatternRejectBtn) { bulkReviewAttrSignalPattern(signalPatternRejectBtn.dataset.pattern, 'Rejected'); return; }
+
+    const signalPatternMembersBtn = e.target.closest('button[data-action="toggle-attr-signal-pattern-members"]');
+    if (signalPatternMembersBtn) { toggleAttrSignalPatternMembers(signalPatternMembersBtn); return; }
+
+    const signalReviewModeBtn = e.target.closest('#attrSignalReviewModeToggle button[data-review-mode]');
+    if (signalReviewModeBtn) { setAttrSignalReviewMode(signalReviewModeBtn.dataset.reviewMode); return; }
   });
 
   document.getElementById('btnAttrRegCancel')?.addEventListener('click', closeAttrRegistryModal);
@@ -1136,6 +1351,7 @@ async function onAttributesTabActivated() {
   initAttrRegistryFilters();
   initAttrSignalFilters();
   initAttributesTabEvents();
+  setAttrSignalReviewMode(attrSignalReviewMode); // sets initial toggle active state + view visibility
   await Promise.all([attrTierFiltersReady, attrLevelFiltersReady, attrDimFiltersReady, attrRegistryFiltersReady, attrSignalFiltersReady]);
   renderZoneTierSection();
   renderLevelAnalysisSection();

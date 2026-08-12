@@ -1297,19 +1297,49 @@
             <span>&#11015;</span> Export to Excel
           </button>
         </div>
-        <div class="drilldown-toolbar" id="attrSignalToolbar"></div>
-        <div class="table-scroll">
-          <table id="tableAttrSignals" class="sticky-actions">
-            <thead>
-              <tr>
-                <th>Material No</th><th>Branch</th><th>Zone</th><th>Row</th><th>Signal Type</th>
-                <th>Evidence</th><th>Current Price</th><th>Sell-Through %</th><th>Review Status</th><th></th>
-              </tr>
-            </thead>
-            <tbody id="attrSignalBody">
-              <tr><td colspan="10" style="text-align:center;color:var(--muted)">Click Search to load positional signal candidates.</td></tr>
-            </tbody>
-          </table>
+        <p class="lot-filter-help" style="border-top:none;padding-top:0;">Many Gazebo/Center Proximity candidates
+          share the exact same lot-number gap (e.g. the same physical row template reused across zones) — Pattern
+          mode groups those together so you can review and confirm/reject one recurring gap at a time instead of
+          each occurrence individually. Wide Walkway candidates (no gap pattern) always list individually.</p>
+        <div class="subtab-bar" id="attrSignalReviewModeToggle">
+          <button type="button" class="subtab" data-review-mode="pattern">Review by Pattern</button>
+          <button type="button" class="subtab" data-review-mode="individual">Review Individually</button>
+        </div>
+
+        <!-- Individual mode -->
+        <div id="attrSignalIndividualView">
+          <div class="drilldown-toolbar" id="attrSignalToolbar"></div>
+          <div class="table-scroll">
+            <table id="tableAttrSignals" class="sticky-actions">
+              <thead>
+                <tr>
+                  <th>Material No</th><th>Branch</th><th>Zone</th><th>Row</th><th>Signal Type</th>
+                  <th>Evidence</th><th>Current Price</th><th>Sell-Through %</th><th>Review Status</th><th></th>
+                </tr>
+              </thead>
+              <tbody id="attrSignalBody">
+                <tr><td colspan="10" style="text-align:center;color:var(--muted)">Click Search to load positional signal candidates.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Pattern mode -->
+        <div id="attrSignalPatternView">
+          <div class="drilldown-toolbar" id="attrSignalPatternToolbar"></div>
+          <div class="table-scroll">
+            <table id="tableAttrSignalPatterns" class="sticky-actions">
+              <thead>
+                <tr>
+                  <th>Pattern</th><th>Occurrences</th><th>Zones/Rows</th><th>Sample Evidence</th>
+                  <th>Review Status</th><th></th>
+                </tr>
+              </thead>
+              <tbody id="attrSignalPatternBody">
+                <tr><td colspan="6" style="text-align:center;color:var(--muted)">Click Search to load positional signal candidates.</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 

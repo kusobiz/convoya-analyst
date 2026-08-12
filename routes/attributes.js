@@ -606,6 +606,51 @@ export function reviewPlotSignal(data = {}) {
   return { success: true };
 }
 
+// Gazebo/Center Proximity evidence always embeds its gap boundary as "{before}→{after}" — in
+// both the step-pattern form ("Gap 398→608: ...") and the fallback-heuristic form ("Adjacent to
+// lot-number gap: 398→608 (...)") — so this single regex covers both. Many candidates across
+// different Branch/Zone/Row groups share the exact same boundary (the same physical row
+// template, and often the same underlying step/suffix convention, reused across zones), which
+// is what makes pattern-grouped bulk review worthwhile. Wide Walkway evidence never matches —
+// those always review individually. Shared between listPlotSignals (client groups by this on
+// its own) and reviewPlotSignalsByPattern (server must match it exactly the same way).
+export function extractGapPattern(evidence) {
+  const m = String(evidence || '').match(/(\d+)→(\d+)/);
+  return m ? `${m[1]}→${m[2]}` : null;
+}
+
+export function reviewPlotSignalsByPattern(data = {}) {
+  const patternKey = String(data.patternKey || '').trim();
+  if (!patternKey) throw new Error('patternKey is required');
+  if (!VALID_REVIEW_STATUSES.has(data.reviewStatus) || data.reviewStatus === 'Pending') {
+    throw new Error('reviewStatus must be Confirmed or Rejected');
+  }
+  const notes = data.notes != null ? String(data.notes).trim() || null : undefined;
+
+  // Only Pending rows are bulk-updated — a pattern group may contain rows already
+  // Confirmed/Rejected individually, and those shouldn't be silently overwritten by a bulk
+  // action taken later on the same recurring pattern.
+  const pendingRows = getDb().prepare(`
+    SELECT id, evidence FROM plot_position_signals
+    WHERE signal_type = 'Gazebo/Center Proximity' AND review_status = 'Pending'
+  `).all();
+  const matchingIds = pendingRows.filter(r => extractGapPattern(r.evidence) === patternKey).map(r => r.id);
+  if (!matchingIds.length) return { success: true, updatedCount: 0 };
+
+  const update = getDb().prepare(`
+    UPDATE plot_position_signals
+    SET review_status = ?, reviewed_at = datetime('now')${notes !== undefined ? ', notes = ?' : ''}
+    WHERE id = ?
+  `);
+  const updateMany = getDb().transaction((ids) => {
+    for (const id of ids) {
+      update.run(...(notes !== undefined ? [data.reviewStatus, notes, id] : [data.reviewStatus, id]));
+    }
+  });
+  updateMany(matchingIds);
+  return { success: true, updatedCount: matchingIds.length };
+}
+
 const router = Router();
 
 router.post('/zone-tiers', (req, res) => {
@@ -676,6 +721,15 @@ router.post('/plot-signals/review', (req, res) => {
     res.json(reviewPlotSignal(req.body || {}));
   } catch (err) {
     console.error('Attributes plot-signals review error:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/plot-signals/review-pattern', (req, res) => {
+  try {
+    res.json(reviewPlotSignalsByPattern(req.body || {}));
+  } catch (err) {
+    console.error('Attributes plot-signals review-pattern error:', err.message);
     res.status(400).json({ error: err.message });
   }
 });
