@@ -73,6 +73,9 @@ const FILTER_COLUMNS = {
   lotType:      'Lot Type',
   status:       'Status',
   priceRange:   'Price Range',
+  // Product Attributes' Dimension Consistency drill-down (queryLotsDetail only) narrows to the
+  // exact mismatched dimension, not every dimension present in that zone/lot type.
+  dimension:    'Lot Dimension',
 };
 
 // "Big Lot" = Unit Price >= 500,000 MYR, matching the existing "≥500k" Price Range tier.

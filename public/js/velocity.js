@@ -679,7 +679,11 @@ function renderVelocityChart() {
             label: (tCtx) => {
               const p = tCtx.dataset.rawPoints[tCtx.dataIndex];
               if (!p) return ` ${tCtx.dataset.label}: no sales`;
-              return ` ${tCtx.dataset.label}: ${fmt(p.units)} units · ${myr(p.value)}`;
+              // "at this point" = across every series sharing this same month (x-index) — not
+              // a running/grand total — same formula whether rendered as line, stacked area,
+              // or grouped bar, since all three share this one tooltip callback.
+              const pointTotal = sumFinite(tCtx.chart.data.datasets.map(ds => ds.data[tCtx.dataIndex]));
+              return ` ${tCtx.dataset.label}: ${fmt(p.units)} units · ${myr(p.value)}${pctOfTotalLabel(tCtx.parsed.y, pointTotal, 'total across all series at this point')}`;
             },
             footer: tooltipFooter ? () => tooltipFooter : undefined,
           },

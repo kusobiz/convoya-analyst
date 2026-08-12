@@ -98,6 +98,7 @@ function onBigLotFilterChange() {
   }
   if (typeof refreshVelocityForBigLotFilter === 'function') refreshVelocityForBigLotFilter();
   if (typeof refreshLifecycleForBigLotFilter === 'function') refreshLifecycleForBigLotFilter();
+  if (typeof refreshAttributesForBigLotFilter === 'function') refreshAttributesForBigLotFilter();
 }
 window.onBigLotFilterChange = onBigLotFilterChange;
 
@@ -113,6 +114,7 @@ function renderBranchSellthroughChart(branches) {
   destroyChart('branchSellthrough');
   const ctx = document.getElementById('chartBranchSellthrough');
   if (!ctx) return;
+  const branchSellthroughTotal = sumFinite(branches.map(b => b.sellThrough));
   charts.branchSellthrough = new Chart(ctx, {
     type: 'bar',
     data: {
@@ -132,7 +134,7 @@ function renderBranchSellthroughChart(branches) {
       plugins: {
         legend: { display: false },
         tooltip: {
-          callbacks: { label: ctx => ` ${ctx.raw.toFixed(1)}%` },
+          callbacks: { label: ctx => ` ${ctx.raw.toFixed(1)}%${pctOfTotalLabel(ctx.raw, branchSellthroughTotal, 'total across all bars shown')}` },
         },
       },
       scales: {
@@ -154,10 +156,11 @@ function renderProductDonut(products) {
   if (!ctx) return;
   const top6 = [...products].sort((a,b) => b.totalBalance - a.totalBalance).slice(0, 6);
   const palette = [C.navy, C.gold, C.blue, C.green, C.amber, C.red];
+  const donutTotal = sumFinite(top6.map(p => p.totalBalance));
   charts.productDonut = new Chart(ctx, {
     type: 'doughnut',
     data: {
-      labels: top6.map(p => p.product.replace('NV ', '')),
+      labels: top6.map(p => stripNVPrefix(p.product)),
       datasets: [{
         data: top6.map(p => p.totalBalance),
         backgroundColor: palette,
@@ -175,7 +178,7 @@ function renderProductDonut(products) {
           labels: { font: { size: 10 }, padding: 10, boxWidth: 12 },
         },
         tooltip: {
-          callbacks: { label: ctx => ` ${ctx.label}: ${fmt(ctx.raw)} units` },
+          callbacks: { label: ctx => ` ${ctx.label}: ${fmt(ctx.raw)} units${pctOfTotalLabel(ctx.raw, donutTotal, 'total')}` },
         },
       },
     },
@@ -203,6 +206,7 @@ function renderStatusBar(statuses) {
     borderWidth: 1,
     borderRadius: 4,
   }));
+  const statusBarTotal = sumFinite(statuses.map(s => s.count));
   charts.statusBar = new Chart(ctx, {
     type: 'bar',
     data: { labels: ['All Lots'], datasets },
@@ -213,7 +217,7 @@ function renderStatusBar(statuses) {
       plugins: {
         legend: { position: 'bottom', labels: { font: { size: 10 }, padding: 8, boxWidth: 12 } },
         tooltip: {
-          callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.raw)} lots` },
+          callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.raw)} lots${pctOfTotalLabel(ctx.raw, statusBarTotal, "this bar's total")}` },
         },
       },
       scales: {
@@ -257,7 +261,12 @@ function renderBranchStackedChart(branches) {
       plugins: {
         legend: { position: 'bottom', labels: { font: { size: 11 } } },
         tooltip: {
-          callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.raw)}` },
+          callbacks: {
+            label: ctx => {
+              const barTotal = sumFinite(ctx.chart.data.datasets.map(ds => ds.data[ctx.dataIndex]));
+              return ` ${ctx.dataset.label}: ${fmt(ctx.raw)}${pctOfTotalLabel(ctx.raw, barTotal, "this bar's total")}`;
+            },
+          },
         },
       },
       scales: {
@@ -274,10 +283,11 @@ function renderProductHBar(products) {
   const ctx = document.getElementById('chartProductBar');
   if (!ctx) return;
   const sorted = [...products].sort((a, b) => b.sellThrough - a.sellThrough);
+  const productBarTotal = sumFinite(sorted.map(p => p.sellThrough));
   charts.productBar = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: sorted.map(p => p.product.replace('NV ', '')),
+      labels: sorted.map(p => stripNVPrefix(p.product)),
       datasets: [{
         label: 'Sell-through %',
         data: sorted.map(p => parseFloat(p.sellThrough.toFixed(1))),
@@ -294,7 +304,7 @@ function renderProductHBar(products) {
       plugins: {
         legend: { display: false },
         tooltip: {
-          callbacks: { label: ctx => ` ${ctx.raw.toFixed(1)}%` },
+          callbacks: { label: ctx => ` ${ctx.raw.toFixed(1)}%${pctOfTotalLabel(ctx.raw, productBarTotal, 'total across all bars shown')}` },
         },
       },
       scales: {
@@ -333,7 +343,7 @@ function renderProductTable(products) {
     const color = sellColor(p.sellThrough);
     const vel   = velocityBadge(p.sellThrough);
     return `<tr>
-      <td>${p.product}</td>
+      <td>${stripNVPrefix(p.product)}</td>
       <td>${fmt(p.totalStock)}</td>
       <td>${fmt(p.totalSold)}</td>
       <td>${fmt(p.totalBalance)}</td>
@@ -398,6 +408,108 @@ function renderYTDBadge() {
   el.textContent = 'YTD ' + label;
 }
 
+// ── Monthly Trend (Overview tab, above KPI cards) ──
+// Backed by monthly_snapshots — the one table this app carries across monthly data reloads (see
+// scripts/excel_to_sqlite.py), so this is the only place a trend-over-time view is possible at
+// all; everything else only ever reflects whichever month's Excel file is currently loaded.
+const TREND_MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function formatTrendMonth(yearMonth) {
+  const [y, m] = String(yearMonth).split('-');
+  return `${TREND_MONTH_ABBR[parseInt(m, 10) - 1] || m} ${y}`;
+}
+
+function renderMonthlyTrendChart(rows) {
+  destroyChart('monthlyTrend');
+  const ctx = document.getElementById('chartMonthlyTrend');
+  if (!ctx || !rows.length) return;
+  charts.monthlyTrend = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: rows.map(r => formatTrendMonth(r.yearMonth)),
+      datasets: [
+        {
+          label: 'Sell-Through %',
+          data: rows.map(r => r.sellThroughPct),
+          borderColor: C.blue,
+          backgroundColor: C.blue,
+          yAxisID: 'y',
+          tension: 0.3,
+        },
+        {
+          label: 'Balance Value',
+          data: rows.map(r => r.balanceValue),
+          borderColor: C.gold,
+          backgroundColor: C.gold,
+          yAxisID: 'y1',
+          tension: 0.3,
+        },
+      ],
+    },
+    options: {
+      ...CHART_DEFAULTS,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        y:  { type: 'linear', position: 'left',  title: { display: true, text: 'Sell-Through %' },
+              ticks: { callback: v => v + '%' } },
+        y1: { type: 'linear', position: 'right', title: { display: true, text: 'Balance Value' },
+              grid: { drawOnChartArea: false }, ticks: { callback: v => myrCompact(v) } },
+      },
+      plugins: {
+        ...CHART_DEFAULTS.plugins,
+        tooltip: {
+          callbacks: {
+            label: (c) => c.dataset.label === 'Sell-Through %'
+              ? `${c.dataset.label}: ${pct(c.parsed.y)}`
+              : `${c.dataset.label}: ${myr(c.parsed.y)}`,
+          },
+        },
+      },
+    },
+  });
+}
+
+// One cell = this month's value plus a small colored MoM % indicator underneath — same
+// direction/color convention as Sales Velocity's MoM columns (pct-up/pct-down/pct-none), with a
+// ▲/▼ glyph added (matching the sort-arrow glyph already used elsewhere) since this is a single
+// stacked cell rather than its own dedicated MoM column.
+function renderTrendCell(formattedValue, momPct) {
+  if (momPct === null || momPct === undefined || !isFinite(momPct)) {
+    return `<td>${formattedValue}<div class="trend-mom pct-none">—</div></td>`;
+  }
+  const cls = momPct > 0 ? 'pct-up' : momPct < 0 ? 'pct-down' : 'pct-none';
+  const arrow = momPct > 0 ? '▲' : momPct < 0 ? '▼' : '–';
+  const sign = momPct > 0 ? '+' : '';
+  return `<td>${formattedValue}<div class="trend-mom ${cls}">${arrow} ${sign}${momPct.toFixed(1)}%</div></td>`;
+}
+
+function renderMonthlyTrendTable(rows) {
+  const body = document.querySelector('#tableMonthlyTrend tbody');
+  if (!body) return;
+  body.innerHTML = rows.map(r => `
+    <tr>
+      <td>${formatTrendMonth(r.yearMonth)}</td>
+      ${renderTrendCell(fmt(r.totalStock), r.momPct.totalStock)}
+      ${renderTrendCell(fmt(r.totalSold), r.momPct.totalSold)}
+      ${renderTrendCell(fmt(r.totalBalance), r.momPct.totalBalance)}
+      ${renderTrendCell(pct(r.sellThroughPct), r.momPct.sellThroughPct)}
+      ${renderTrendCell(myr(r.balanceValue), r.momPct.balanceValue)}
+    </tr>
+  `).join('');
+}
+
+async function loadMonthlyTrend() {
+  try {
+    const res = await fetch('/api/overview/monthly-trend');
+    if (res.status === 401 || res.redirected || res.url.includes('/login')) return;
+    if (!res.ok) throw new Error('Failed to load monthly trend');
+    const d = await res.json();
+    renderMonthlyTrendChart(d.rows);
+    renderMonthlyTrendTable(d.rows);
+  } catch (err) {
+    console.error('[dashboard] loadMonthlyTrend failed:', err);
+  }
+}
+
 // ── Lot Drill-Down ──
 let lastLotRows = [];
 let lastLotMode = 'structured';
@@ -412,11 +524,7 @@ function materialTypeMode(materialType) {
   return null;
 }
 
-// Display-only: the DB's "Material Type Desc." values are all prefixed "NV ";
-// queries always use the full value, only rendering strips it.
-function stripNVPrefix(materialType) {
-  return String(materialType || '').replace(/^NV\s+/i, '');
-}
+// stripNVPrefix lives in common.js (loaded first) — shared across every tab.
 
 function lotStatusBadgeClass(status) {
   return { OPEN: 'badge--red', CONFIRMED: 'badge--green', EXERCISED: 'badge--blue', HOLD: 'badge--amber' }[status] || 'badge--navy';
@@ -2426,6 +2534,7 @@ function renderPricingQuadrantChart(rows) {
   // Area (not radius) scales with balance value, so bubble size reads as "value at stake"
   // without visually exaggerating the difference between combos.
   const radiusFor = v => 4 + Math.sqrt(Math.max(v, 0) / maxBalance) * 18;
+  const totalBalanceShown = sumFinite(rows.map(r => r.balanceValue));
 
   const byCategory = {};
   for (const r of rows) (byCategory[r.category] ||= []).push(r);
@@ -2466,7 +2575,7 @@ function renderPricingQuadrantChart(rows) {
                 `${stripNVPrefix(r.productType)} · ${r.branch} · ${r.priceRange}`,
                 `Avg Price: ${myr(r.avgPrice)}`,
                 `Sell-through: ${pct(r.sellThrough)}`,
-                `Balance Value: ${myr(r.balanceValue)}`,
+                `Balance Value: ${myr(r.balanceValue)}${pctOfTotalLabel(r.balanceValue, totalBalanceShown, 'total balance value shown')}`,
                 `Category: ${PRICING_CATEGORY_META[r.category]?.label || r.category}`,
                 'Click to view underlying lots',
               ];
@@ -2852,14 +2961,14 @@ function renderPricingPivotTable() {
     ? `<span class="sort-arrow">${pivotSortState.dir === 'asc' ? '▲' : '▼'}</span>` : '';
 
   const groupTh = `<th class="sortable-th${pivotSortState.key === 'GROUP' ? ' sorted' : ''}" data-pivot-key="GROUP">${escapeHtml(rowDimension)}${sortArrow('GROUP')}</th>`;
-  const colThs = columns.map((c, i) => `<th class="sortable-th${pivotSortState.key === i ? ' sorted' : ''}" data-pivot-key="${i}">${escapeHtml(c)}${sortArrow(i)}</th>`).join('');
+  const colThs = columns.map((c, i) => `<th class="sortable-th${pivotSortState.key === i ? ' sorted' : ''}" data-pivot-key="${i}">${escapeHtml(stripNVPrefix(c))}${sortArrow(i)}</th>`).join('');
   const totalTh = `<th class="sortable-th${pivotSortState.key === 'TOTAL' ? ' sorted' : ''}" data-pivot-key="TOTAL">TOTAL${sortArrow('TOTAL')}</th>`;
   headRow.innerHTML = groupTh + colThs + totalTh;
 
   const order = pivotSortedRowIndices(result);
   body.innerHTML = order.map(i => {
     const tds = cells[i].map(v => `<td class="matrix-qty-col">${pivotMetricText(metric, v)}</td>`).join('');
-    return `<tr><td><strong>${escapeHtml(rows[i])}</strong></td>${tds}<td class="matrix-total-cell">${pivotMetricText(metric, rowTotals[i])}</td></tr>`;
+    return `<tr><td><strong>${escapeHtml(stripNVPrefix(rows[i]))}</strong></td>${tds}<td class="matrix-total-cell">${pivotMetricText(metric, rowTotals[i])}</td></tr>`;
   }).join('');
 
   if (foot) {
@@ -2910,12 +3019,12 @@ function exportPivotExcel() {
   const rawVal = metric === 'Unit Count' ? v => Math.round(v) : v => Number(v.toFixed(2));
   const numFmt = metric === 'Sell-through %' ? '0.0"%"' : (metric === 'Avg Price' || metric === 'Balance Value') ? '"RM "#,##0' : '#,##0';
 
-  const header = [rowDimension, ...columns, 'TOTAL'];
+  const header = [rowDimension, ...columns.map(stripNVPrefix), 'TOTAL'];
   const aoa = [
     [`${rowDimension} x ${colDimension} — ${metric}`],
     [],
     header,
-    ...rows.map((r, i) => [r, ...cells[i].map(rawVal), rawVal(rowTotals[i])]),
+    ...rows.map((r, i) => [stripNVPrefix(r), ...cells[i].map(rawVal), rawVal(rowTotals[i])]),
     ['TOTAL', ...colTotals.map(rawVal), rawVal(grandTotal)],
   ];
 
@@ -3075,6 +3184,10 @@ function showSessionExpired() {
 // ── Bootstrap ──
 async function initDashboard() {
   try {
+    // Not part of the bigLotFilter-scoped /api/data payload — monthly_snapshots has no filters
+    // (see its own comments), so this runs independently and doesn't block KPI/chart rendering.
+    loadMonthlyTrend();
+
     const qs = window.bigLotFilter && window.bigLotFilter !== 'all' ? `?bigLotFilter=${window.bigLotFilter}` : '';
     const res = await fetch(`/api/data${qs}`);
     if (res.status === 401 || res.redirected || res.url.includes('/login')) {

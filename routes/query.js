@@ -10,6 +10,7 @@ import {
   getPriceRangeSummary,
 } from '../src/reader.js';
 import { queryLots } from './lots.js';
+import { stripProductPrefix } from '../src/format.js';
 
 const router = Router();
 const client = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
@@ -63,7 +64,7 @@ function buildSystemPrompt() {
   ).join('\n');
 
   const productTable = products.map(p =>
-    `  ${p.product}: Stock=${p.totalStock}, Sold=${p.totalSold}, Balance=${p.totalBalance}, Sell-through=${pct(p.sellThrough)}`
+    `  ${stripProductPrefix(p.product)}: Stock=${p.totalStock}, Sold=${p.totalSold}, Balance=${p.totalBalance}, Sell-through=${pct(p.sellThrough)}`
   ).join('\n');
 
   const bdTable = bdFocus.map(b =>
@@ -117,6 +118,7 @@ RESPONSE GUIDELINES:
 - Reserve tables only for genuinely tabular data with many rows
 - Bold only the single most important figure per response, not every number
 - Format all numbers with commas and MYR prefix
+- Refer to products without the "NV " prefix (e.g. "Niche", not "NV Niche") — it's an internal Material Type code, not sales-facing naming
 - Keep responses under 400 words unless explicitly asked for a full report
 - Focus on actionable insights for sales managers`;
 }

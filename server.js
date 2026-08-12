@@ -21,6 +21,8 @@ import lotsRouter from './routes/lots.js';
 import pricingRouter from './routes/pricing.js';
 import velocityRouter from './routes/velocity.js';
 import lifecycleRouter from './routes/lifecycle.js';
+import attributesRouter from './routes/attributes.js';
+import overviewRouter from './routes/overview.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -85,6 +87,8 @@ app.use('/api/lots', lotsRouter);
 app.use('/api/pricing', pricingRouter);
 app.use('/api/velocity', velocityRouter);
 app.use('/api/lifecycle', lifecycleRouter);
+app.use('/api/attributes', attributesRouter);
+app.use('/api/overview', overviewRouter);
 
 app.listen(PORT, () => {
   console.log(`analyst running on http://localhost:${PORT}`);

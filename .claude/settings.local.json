@@ -28,7 +28,17 @@
       "Read(//root/.pm2/logs/**)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3001/login)",
       "Bash(sqlite3 /root/analyst/data/stock.db \".schema master_stock\")",
-      "Bash(xargs ls -la)"
+      "Bash(xargs ls -la)",
+      "Bash(sqlite3 data/stock.db \"SELECT \\\\\"Sales Date\\\\\", \\\\\"Lot Create On\\\\\", \\\\\"Total Sold Case\\\\\", \\\\\"Sold Amount\\\\\", \\\\\"Total Stock Case\\\\\", \\\\\"Status\\\\\" FROM master_stock WHERE \\\\\"Total Sold Case\\\\\" > 0 LIMIT 10;\")",
+      "Bash(sqlite3 data/stock.db \"SELECT COUNT\\(*\\) FROM master_stock WHERE \\\\\"Total Sold Case\\\\\" > 0;\")",
+      "Bash(sqlite3 data/stock.db \"SELECT DISTINCT length\\(CAST\\(\\\\\"Sales Date\\\\\" AS TEXT\\)\\) FROM master_stock WHERE \\\\\"Total Sold Case\\\\\" > 0;\")",
+      "Bash(sqlite3 data/stock.db \"SELECT \\\\\"Sales Date\\\\\", \\\\\"Lot Create On\\\\\", \\\\\"Total Sold Case\\\\\" FROM master_stock WHERE \\\\\"Total Sold Case\\\\\" = 0 LIMIT 5;\")",
+      "Bash(sqlite3 data/stock.db \"SELECT MIN\\(\\\\\"Sales Date\\\\\"\\), MAX\\(\\\\\"Sales Date\\\\\"\\) FROM master_stock WHERE \\\\\"Total Sold Case\\\\\" > 0;\")",
+      "Bash(sqlite3 data/stock.db \"PRAGMA table_info\\(master_stock\\);\")",
+      "Bash(git -C /root/analyst status --short)",
+      "Bash(curl -s -o /dev/null -w \"PORT_CHECK: %{http_code}\\\\n\" http://localhost:3001/)",
+      "Bash(sqlite3 data/stock.db \"PRAGMA table_info\\(master_stock\\)\")",
+      "Bash(sqlite3 -header -column data/stock.db \"SELECT \\\\\"Material No\\\\\", Branch, Zone, Row, \\\\\"Lot Dimension\\\\\", \\\\\"Unit Price\\\\\", \\\\\"Total Stock Case\\\\\", \\\\\"Total Sold Case\\\\\", Status FROM master_stock WHERE \\\\\"Material Type Desc.\\\\\" LIKE '%Burial Plot%' LIMIT 10\")"
     ]
   }
 }
