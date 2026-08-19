@@ -1004,6 +1004,9 @@ tfoot .totals-row td {
 }
 
 /* ── Zone Summary Matrix ── */
+#matrixLotTypeRow {
+  margin-bottom: 0.9rem;
+}
 .matrix-header {
   display: flex;
   gap: 1.5rem;
@@ -1044,6 +1047,79 @@ tfoot .totals-row td {
   height: 15px;
   accent-color: var(--navy);
   cursor: pointer;
+}
+
+/* Side-by-Side Suite Comparison (Lot Drill-Down) — one panel per selected Suite No/Zone,
+   laid out horizontally so 2-3 fit without scrolling and more scroll into view. */
+.suite-compare-scroll {
+  display: flex;
+  gap: 1rem;
+  overflow-x: auto;
+  padding-bottom: 0.4rem;
+}
+.suite-compare-panel {
+  flex: 0 0 420px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem;
+  background: var(--white);
+}
+.suite-compare-panel-header {
+  font-weight: 700;
+  color: var(--navy);
+  font-size: 0.95rem;
+  margin-bottom: 0.7rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.suite-compare-subtitle {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 0.9rem 0 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.suite-compare-panel table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.suite-compare-panel th, .suite-compare-panel td {
+  padding: 0.35rem 0.5rem;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.suite-compare-panel th:first-child, .suite-compare-panel td:first-child {
+  text-align: left;
+}
+.suite-compare-panel tr.suite-compare-total {
+  font-weight: 700;
+  color: var(--navy);
+}
+.suite-compare-panel tr.suite-compare-subtotal td {
+  font-weight: 700;
+  background: var(--bg);
+}
+.suite-compare-group-cell {
+  font-weight: 700;
+  color: var(--navy);
+  text-align: left;
+  vertical-align: middle !important;
+  background: var(--bg);
+  border-right: 2px solid var(--border);
+}
+.suite-compare-panel .table-scroll {
+  overflow-x: auto;
+}
+
+/* Combined Summary — reuses .suite-compare-panel's card/table look but sits full-width
+   above the horizontally-scrolling per-suite panels, not as a flex item alongside them. */
+.suite-compare-summary {
+  flex: none;
+  width: 100%;
+  margin-bottom: 1rem;
 }
 
 /* Consistent cell sizing so rows/columns line up regardless of how many

@@ -581,6 +581,13 @@ function lotTableColumnCount(mode) {
 // { key: null } means unsorted (server/group order).
 let lotSortState = { key: null, dir: 'asc' };
 
+// Lot Results pagination — same Page-X-of-Y + Previous/Next pattern as the Product
+// Attributes Registry (attrRegistryPage/PageSize), not the 10/25/50/Show-All accordion
+// pattern used by the nested per-row View Lots panels (DRILL_PAGE_SIZES) further down.
+const LOT_RESULTS_PAGE_SIZES = [10, 25];
+let lotResultsPageSize = 10;
+let lotResultsPage = 1;
+
 function sortLotRows(rows, sortState) {
   if (!sortState.key) return rows;
   const { key, dir } = sortState;
@@ -624,6 +631,26 @@ function renderLotResultViewLotsCell(r, mode) {
   return `<div class="row-actions">${lotTypeFilter}${viewLotsBtn}</div>`;
 }
 
+function renderLotResultsToolbar(totalCount, totalPages) {
+  const el = document.getElementById('lotResultsToolbar');
+  if (!el) return;
+  if (!totalCount) { el.innerHTML = ''; return; }
+  const rangeStart = (lotResultsPage - 1) * lotResultsPageSize + 1;
+  const rangeEnd = Math.min(lotResultsPage * lotResultsPageSize, totalCount);
+  el.innerHTML = `
+    <div class="drilldown-toolbar-count">Showing ${fmt(rangeStart)}–${fmt(rangeEnd)} of ${fmt(totalCount)} entries</div>
+    <div class="drilldown-toolbar-actions">
+      <div class="drill-page-size">
+        ${LOT_RESULTS_PAGE_SIZES.map(n => `<button type="button" class="drill-page-btn${lotResultsPageSize === n ? ' active' : ''}" data-lot-results-page="${n}">${n}</button>`).join('')}
+      </div>
+      <div class="drill-page-nav">
+        <button type="button" class="drill-page-nav-btn" data-lot-results-nav="prev" ${lotResultsPage <= 1 ? 'disabled' : ''}>&laquo; Previous</button>
+        <span class="drill-page-nav-indicator">Page ${lotResultsPage} of ${totalPages}</span>
+        <button type="button" class="drill-page-nav-btn" data-lot-results-nav="next" ${lotResultsPage >= totalPages ? 'disabled' : ''}>Next &raquo;</button>
+      </div>
+    </div>`;
+}
+
 function renderLotResultsBody(mode) {
   const tbody = document.querySelector('#tableLots tbody');
   const tfoot = document.querySelector('#tableLots tfoot');
@@ -632,6 +659,12 @@ function renderLotResultsBody(mode) {
   const columns = lotColumnsFor(mode);
   const colCount = lotTableColumnCount(mode);
   const rows = sortLotRows(lastLotRows, lotSortState);
+  const totalCount = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / lotResultsPageSize));
+  if (lotResultsPage > totalPages) lotResultsPage = totalPages;
+  if (lotResultsPage < 1) lotResultsPage = 1;
+
+  renderLotResultsToolbar(totalCount, totalPages);
 
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--muted)">No lots match these filters.</td></tr>`;
@@ -639,12 +672,17 @@ function renderLotResultsBody(mode) {
     return;
   }
 
-  tbody.innerHTML = rows.map(r => {
+  const pageStart = (lotResultsPage - 1) * lotResultsPageSize;
+  const pageRows = rows.slice(pageStart, pageStart + lotResultsPageSize);
+
+  tbody.innerHTML = pageRows.map(r => {
     const cells = columns.map(col => `<td>${col.render ? col.render(r) : (r[col.key] ?? '')}</td>`).join('');
     return `<tr class="accordion-row">${cells}<td>${renderLotResultViewLotsCell(r, mode)}</td></tr>
       <tr class="accordion-detail" style="display:none"><td colspan="${colCount}"><div class="drilldown-inline" data-drill-content></div></td></tr>`;
   }).join('');
 
+  // Totals always sum the full filtered dataset (lastLotRows), not just the rows on the
+  // current page — pagination only changes what's visible, not what the footer reports.
   const t = sumLotRows(lastLotRows);
   const textColCount = columns.filter(c => c.type === 'text').length;
   const numericCells = columns.filter(c => c.type === 'number')
@@ -666,6 +704,7 @@ function onLotSortClick(key) {
   } else {
     lotSortState = { key, dir: 'asc' };
   }
+  lotResultsPage = 1;
   renderLotResultsTable();
 }
 
@@ -732,6 +771,21 @@ function initLotResultsEvents() {
   panel.addEventListener('click', (e) => {
     if (handleDrillDownPaginationOrExport(e)) return;
 
+    const lotResultsPageBtn = e.target.closest('button[data-lot-results-page]');
+    if (lotResultsPageBtn) {
+      lotResultsPageSize = Number(lotResultsPageBtn.dataset.lotResultsPage);
+      lotResultsPage = 1;
+      renderLotResultsBody(lastLotMode);
+      return;
+    }
+
+    const lotResultsNavBtn = e.target.closest('button[data-lot-results-nav]');
+    if (lotResultsNavBtn) {
+      lotResultsPage += lotResultsNavBtn.dataset.lotResultsNav === 'prev' ? -1 : 1;
+      renderLotResultsBody(lastLotMode);
+      return;
+    }
+
     const viewLotsBtn = e.target.closest('button[data-action="toggle-lotresult-lots"]');
     if (viewLotsBtn) { toggleLotResultLots(viewLotsBtn); return; }
 
@@ -790,10 +844,12 @@ async function renderLotDrillDown() {
     lastLotRows = [];
     lastLotMode = 'structured';
     lotSortState = { key: null, dir: 'asc' };
+    lotResultsPage = 1;
     matrixSortState = { key: null, dir: 'desc' };
     renderLotsTableHead('structured');
     tbody.innerHTML = `<tr><td colspan="${lotTableColumnCount('structured')}" style="text-align:center;color:var(--muted)">Please select a Product Type to begin.</td></tr>`;
     if (tfoot) tfoot.innerHTML = '';
+    renderLotResultsToolbar(0, 1);
     renderLotMatrix([], {}, 'structured');
     return;
   }
@@ -804,14 +860,13 @@ async function renderLotDrillDown() {
     zone:   lotFilters.zone.getValues(),
     status: lotFilters.status.getValues(),
     priceRange: lotFilters.priceRange.getValues(),
+    lotType: lotFilters.lotType.getValues(),
     bigLotFilter: window.bigLotFilter,
   };
   if (mode === 'structured') {
     body.suiteNo = lotFilters.suiteNo.getValues();
     body.section = lotFilters.section.getValues();
     body.level   = lotFilters.level.getValues();
-  } else {
-    body.lotType = lotFilters.lotType.getValues();
   }
 
   renderLotsTableHead(mode);
@@ -841,6 +896,7 @@ async function renderLotDrillDown() {
     lastLotRows = rows;
     lastLotMode = resolvedMode;
     lotSortState = { key: null, dir: 'asc' };
+    lotResultsPage = 1;
     // Default matrix view: newest/highest Level first. Lot Type (flat land) rows
     // have no such ordering, so they keep the natural ascending default.
     matrixSortState = { key: null, dir: resolvedMode === 'flat' ? 'asc' : 'desc' };
@@ -848,6 +904,8 @@ async function renderLotDrillDown() {
 
     renderLotResultsTable();
     renderLotMatrix(rows, matrixCtx, resolvedMode);
+    updateSuiteCompareVisibility();
+    if (getSuiteCompareUnits().length >= 1) renderSuiteCompare();
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--red)">Error: ${err.message}</td></tr>`;
     renderLotMatrix([], {}, mode);
@@ -912,6 +970,14 @@ function matrixMetricClass(key) {
 let lastMatrixRows = [];
 let lastMatrixCtx = {};
 let lastMatrixMode = 'structured';
+
+// The matrix's own Lot Type filter narrows lastMatrixRows client-side (no re-query, no effect
+// on the Lot Results table) — every reader of "the matrix's data" (on-screen render + both
+// exports) goes through this so they can never drift out of sync with each other.
+function getMatrixDisplayRows() {
+  const selected = lotFilters.matrixLotType ? lotFilters.matrixLotType.getValues() : [];
+  return selected.length ? lastMatrixRows.filter(r => selected.includes(r.lotType)) : lastMatrixRows;
+}
 
 // key: null (default natural order) | 'GROUP' (row label, i.e. Level/Lot Type) |
 // one of MATRIX_STATUS_ORDER (that column's total) | 'TOTAL' (the row-total column).
@@ -1002,8 +1068,11 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
     return;
   }
 
+  // Its own Lot Type filter narrows the matrix without re-querying and without touching the
+  // Lot Results table — see getMatrixDisplayRows.
+  const displayRows = getMatrixDisplayRows();
   const { showAmount, showPercentage, groupLabel, groups, cells, groupTotals, groupAmounts, colTotals, grandUnits, grandAmount } =
-    computeMatrixData(rows, mode);
+    computeMatrixData(displayRows, mode);
   const metrics = matrixMetrics(showAmount, showPercentage);
   const metricText = (key, units, amount) => matrixMetricText(key, units, amount, grandUnits);
 
@@ -1015,9 +1084,11 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
     const productLabel = joinOrAll((ctx.materialType || []).map(stripNVPrefix), 'All');
     const zoneLabel = joinOrAll(ctx.zone, 'All');
     const suiteLabel = joinOrAll(ctx.suite, 'All');
-    headerEl.innerHTML = mode === 'flat'
+    const matrixLotTypeValues = lotFilters.matrixLotType ? lotFilters.matrixLotType.getValues() : [];
+    const lotTypeSuffix = matrixLotTypeValues.length ? ` — Lot Type <strong>${matrixLotTypeValues.join(', ')}</strong>` : '';
+    headerEl.innerHTML = (mode === 'flat'
       ? `<span><strong>${branchLabel}</strong> — <strong>${productLabel}</strong> — Lot Type Summary</span>`
-      : `<span><strong>${branchLabel}</strong> — <strong>${productLabel}</strong> — Zone <strong>${zoneLabel}</strong> — Suite <strong>${suiteLabel}</strong></span>`;
+      : `<span><strong>${branchLabel}</strong> — <strong>${productLabel}</strong> — Zone <strong>${zoneLabel}</strong> — Suite <strong>${suiteLabel}</strong></span>`) + lotTypeSuffix;
   }
 
   const headRow = document.getElementById('matrixHeadRow');
@@ -1075,9 +1146,9 @@ function renderLotMatrix(rows, ctx, mode = 'structured') {
     </tr>`;
   }
 
-  const totalUnits = rows.reduce((s, r) => s + r.totalStock, 0);
-  const totalSold  = rows.reduce((s, r) => s + r.totalSold, 0);
-  const totalUnsoldOpen = rows.filter(r => r.status === 'OPEN').reduce((s, r) => s + r.totalBalance, 0);
+  const totalUnits = displayRows.reduce((s, r) => s + r.totalStock, 0);
+  const totalSold  = displayRows.reduce((s, r) => s + r.totalSold, 0);
+  const totalUnsoldOpen = displayRows.filter(r => r.status === 'OPEN').reduce((s, r) => s + r.totalBalance, 0);
 
   const kpiRow = document.getElementById('matrixKpiRow');
   if (kpiRow) {
@@ -1135,12 +1206,14 @@ function matrixExportContext() {
   const ctx = lastMatrixCtx || {};
   const mode = lastMatrixMode;
   const productTypes = (ctx.materialType || []).map(stripNVPrefix);
+  const matrixLotTypes = lotFilters.matrixLotType ? lotFilters.matrixLotType.getValues() : [];
   const title = mode === 'flat' ? 'Lot Type Summary Matrix' : 'Zone Summary Matrix';
   const filenameBase = [
     'Zone_Summary',
     filenamePart(ctx.branch),
     filenamePart(productTypes),
     filenamePart(ctx.zone),
+    ...(matrixLotTypes.length ? [filenamePart(matrixLotTypes)] : []),
     fileTimestamp(),
   ].join('_');
   return {
@@ -1150,6 +1223,7 @@ function matrixExportContext() {
     zoneLabel: joinOrAll(ctx.zone, 'All'),
     suiteLabel: joinOrAll(ctx.suite, 'All'),
     sectionLabel: joinOrAll(ctx.section, 'All'),
+    lotTypeLabel: joinOrAll(matrixLotTypes, 'All'),
   };
 }
 
@@ -1171,9 +1245,9 @@ function exportMatrixExcel() {
   if (!lastMatrixRows.length) { alert('No data to export. Run a search first.'); return; }
   if (typeof XLSX === 'undefined') { alert('Excel export library failed to load — check your connection and try again.'); return; }
 
-  const { mode, branchLabel, productLabel, zoneLabel, suiteLabel, sectionLabel, title, filenameBase } = matrixExportContext();
+  const { mode, branchLabel, productLabel, zoneLabel, suiteLabel, sectionLabel, lotTypeLabel, title, filenameBase } = matrixExportContext();
   const { showAmount, showPercentage, groupLabel, groups, cells, groupTotals, groupAmounts, colTotals, grandUnits, grandAmount } =
-    computeMatrixData(lastMatrixRows, mode);
+    computeMatrixData(getMatrixDisplayRows(), mode);
   const metrics = matrixMetrics(showAmount, showPercentage);
   const rawVal = (key, units, amount) => matrixMetricRawValue(key, units, amount, grandUnits);
 
@@ -1187,6 +1261,7 @@ function exportMatrixExcel() {
     aoa.push(['Suite No', suiteLabel]);
     aoa.push(['Section', sectionLabel]);
   }
+  if (lotTypeLabel !== 'All') aoa.push(['Lot Type', lotTypeLabel]);
   aoa.push([]);
 
   // Two-row header: status name spanning its Qty/Amount/% sub-columns, mirroring the
@@ -1258,18 +1333,19 @@ function exportMatrixPDF() {
   if (typeof window.jspdf === 'undefined') { alert('PDF export library failed to load — check your connection and try again.'); return; }
 
   const { jsPDF } = window.jspdf;
-  const { mode, branchLabel, productLabel, zoneLabel, suiteLabel, title, filenameBase } = matrixExportContext();
+  const { mode, branchLabel, productLabel, zoneLabel, suiteLabel, lotTypeLabel, title, filenameBase } = matrixExportContext();
   const { showAmount, showPercentage, groupLabel, groups, cells, groupTotals, groupAmounts, colTotals, grandUnits, grandAmount } =
-    computeMatrixData(lastMatrixRows, mode);
+    computeMatrixData(getMatrixDisplayRows(), mode);
   const metrics = matrixMetrics(showAmount, showPercentage);
   const cellText = (key, units, amount) => matrixMetricText(key, units, amount, grandUnits);
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
 
   // Structured types carry a Suite No context (flat land has no such concept).
-  const titleText = mode === 'structured'
+  const lotTypeSuffix = lotTypeLabel !== 'All' ? ` — Lot Type ${lotTypeLabel}` : '';
+  const titleText = (mode === 'structured'
     ? `${title} — ${branchLabel} — ${productLabel} — Zone ${zoneLabel} — Suite ${suiteLabel}`
-    : `${title} — ${branchLabel} — ${productLabel} — Zone ${zoneLabel}`;
+    : `${title} — ${branchLabel} — ${productLabel} — Zone ${zoneLabel}`) + lotTypeSuffix;
 
   doc.setFontSize(14);
   doc.setTextColor(26, 44, 91);
@@ -1554,9 +1630,9 @@ async function fetchLotLevels(branch, zone, suiteNo, section, materialType, pric
   }
 }
 
-async function fetchLotTypes(branch, zone, materialType, priceRange) {
+async function fetchLotTypes(branch, zone, materialType, priceRange, suiteNo) {
   try {
-    const res = await fetch(`/api/lots/lotTypes?${buildArrayQuery({ branch, zone, materialType, priceRange })}`);
+    const res = await fetch(`/api/lots/lotTypes?${buildArrayQuery({ branch, zone, suiteNo, materialType, priceRange })}`);
     if (!res.ok) return { lotTypes: [], statuses: [] };
     return await res.json();
   } catch (e) {
@@ -1572,6 +1648,23 @@ async function fetchLotTypes(branch, zone, materialType, priceRange) {
 // still resolves normally — there's no separate bypass path to maintain.
 const lotFilters = {};
 
+// Lot Type visibility/options are always data-driven — scoped to Branch+Zone+Suite No
+// (structured) or Branch+Zone (flat), regardless of the structured/flat product-type mode.
+// Some structured suites (e.g. Niche zones) genuinely carry Lot Type values like
+// SINGLE/DOUBLE, so hiding the field purely by product type would bury real data.
+function updateLotTypeFieldVisibility(hasLotTypes) {
+  const field = document.getElementById('fieldLotType');
+  if (field) field.style.display = hasLotTypes ? '' : 'none';
+}
+
+// Zone Summary Matrix's own Lot Type filter — same data-driven values as the main Lot Type
+// field above (identical Branch+Zone+Suite No scope), just a separate selection so narrowing
+// the matrix doesn't also narrow the Lot Results table/export.
+function updateMatrixLotTypeFieldVisibility(hasLotTypes) {
+  const field = document.getElementById('matrixLotTypeRow');
+  if (field) field.style.display = hasLotTypes ? '' : 'none';
+}
+
 async function refreshLotLocationFields() {
   const materialType = lotFilters.materialType.getValues();
   const mode = modeForSelection(materialType);
@@ -1581,11 +1674,12 @@ async function refreshLotLocationFields() {
   const zone = lotFilters.zone.getValues();
   const priceRange = lotFilters.priceRange.getValues();
 
+  let suiteNo = [];
   if (mode === 'structured') {
     const { suites, statuses: suiteStatuses } = await fetchLotSuites(branch, zone, materialType, priceRange);
     lotFilters.suiteNo.setOptions(suites);
 
-    const suiteNo = lotFilters.suiteNo.getValues();
+    suiteNo = lotFilters.suiteNo.getValues();
     const { sections, statuses: sectionStatuses } = await fetchLotSections(branch, zone, suiteNo, materialType, priceRange);
     lotFilters.section.setOptions(sections);
 
@@ -1594,11 +1688,18 @@ async function refreshLotLocationFields() {
     lotFilters.level.setOptions(levels);
 
     lotFilters.status.setOptions(levelStatuses.length ? levelStatuses : (sectionStatuses.length ? sectionStatuses : suiteStatuses));
-  } else {
-    const { lotTypes, statuses } = await fetchLotTypes(branch, zone, materialType, priceRange);
-    lotFilters.lotType.setOptions(lotTypes);
-    lotFilters.status.setOptions(statuses);
   }
+
+  const { lotTypes, statuses: lotTypeStatuses } = await fetchLotTypes(branch, zone, materialType, priceRange, suiteNo);
+  lotFilters.lotType.setOptions(lotTypes);
+  updateLotTypeFieldVisibility(lotTypes.length > 0);
+  lotFilters.matrixLotType.setOptions(lotTypes);
+  updateMatrixLotTypeFieldVisibility(lotTypes.length > 0);
+  if (mode === 'flat') {
+    lotFilters.status.setOptions(lotTypeStatuses);
+  }
+
+  updateSuiteCompareVisibility();
 }
 
 // Re-fetches Zone (a sibling of Price Range in the cascade — both scoped by branch + material
@@ -1629,10 +1730,13 @@ async function refreshLotCascade() {
   const mode = modeForSelection(materialType);
   applyLotModeUI(mode);
 
-  const gated = [lotFilters.priceRange, lotFilters.zone, lotFilters.suiteNo, lotFilters.section, lotFilters.level, lotFilters.lotType, lotFilters.status];
+  const gated = [lotFilters.priceRange, lotFilters.zone, lotFilters.suiteNo, lotFilters.section, lotFilters.level, lotFilters.lotType, lotFilters.matrixLotType, lotFilters.status];
 
   if (!mode) {
     gated.forEach(f => { f.setOptions([]); f.setDisabled(true, 'Select product type first'); });
+    updateLotTypeFieldVisibility(false);
+    updateMatrixLotTypeFieldVisibility(false);
+    updateSuiteCompareVisibility();
     const matrixCard = document.getElementById('lotMatrixCard');
     if (matrixCard) matrixCard.style.display = 'none';
     return;
@@ -1722,6 +1826,16 @@ function initLotFilters() {
   });
   lotFilters.lotType.setDisabled(true);
 
+  // Zone Summary Matrix's own Lot Type narrowing — recomputes the cached matrix client-side
+  // (rerenderCachedMatrix), it doesn't re-query, so it can't affect the Lot Results table.
+  lotFilters.matrixLotType = new MultiSelect('matrixLotType', {
+    placeholder: 'All lot types',
+    disabledText: disabledGateText,
+    emptyText: 'No lot types found',
+    onChange: rerenderCachedMatrix,
+  });
+  lotFilters.matrixLotType.setDisabled(true);
+
   lotFilters.status = new MultiSelect('lotStatus', {
     placeholder: 'All statuses',
     disabledText: disabledGateText,
@@ -1763,13 +1877,574 @@ document.getElementById('matrixHeadRow')?.addEventListener('click', (e) => {
   rerenderCachedMatrix();
 });
 
+// ── Side-by-Side Suite/Zone Comparison ──
+// Shown automatically once 1+ Suite No values are selected (structured product types) or 1+
+// Zone values (flat-land types) — one panel per selected value, each with its own Snapshot
+// and Monthly Sales Trend tables. A single selection renders one panel (no "comparison" in the
+// combined-summary sense — that stays gated to 2+ inside renderCombinedSummaryTable); 2+
+// selections render the existing side-by-side view unchanged. Own small copy of Sales
+// Velocity's month math/period-preset pattern (velocity.js loads after this file, and
+// dashboard.js already duplicates this kind of helper per-tab — see formatTrendMonth above —
+// rather than reaching across files).
+const CMP_MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function cmpFormatMonth(ym) {
+  const y = ym.slice(0, 4);
+  const m = parseInt(ym.slice(4, 6), 10);
+  return `${CMP_MONTH_ABBR[m - 1] || ym.slice(4, 6)} ${y}`;
+}
+function cmpYmAddMonths(ym, delta) {
+  let y = parseInt(ym.slice(0, 4), 10);
+  let m = parseInt(ym.slice(4, 6), 10) + delta;
+  while (m > 12) { m -= 12; y += 1; }
+  while (m < 1) { m += 12; y -= 1; }
+  return `${y}${String(m).padStart(2, '0')}`;
+}
+// Oldest-first ascending, matching Sales Velocity's veloMonthUnion — the table renders
+// left(oldest)-to-right(newest) directly off this order, no reversal anywhere downstream.
+function cmpMonthUnion(seriesList) {
+  const set = new Set();
+  seriesList.forEach(series => series.forEach(s => s.points.forEach(p => set.add(p.yearMonth))));
+  return Array.from(set).sort();
+}
+
+let suiteComparePeriod = '6m'; // '6m' | '12m' | '24m' | 'all'
+let suiteCompareRaw = []; // [{ unit, panelTitle, snapshot, trendSeries }] — unfiltered by period
+
+// A "unit" is one Suite No (structured) or one Zone (flat) selected in the Lot Drill-Down
+// filters — the thing each side-by-side panel represents.
+function getSuiteCompareUnitKind() {
+  const materialType = lotFilters.materialType.getValues();
+  const mode = modeForSelection(materialType);
+  return mode === 'structured' ? 'suiteNo' : mode === 'flat' ? 'zone' : null;
+}
+
+function getSuiteCompareUnits() {
+  const kind = getSuiteCompareUnitKind();
+  if (!kind) return [];
+  return kind === 'suiteNo' ? lotFilters.suiteNo.getValues() : lotFilters.zone.getValues();
+}
+
+// Hides the card the moment the selection drops below 1 unit (e.g. Suite No cleared).
+// Showing it is renderSuiteCompare's job — it only knows there's something to show once
+// its data fetch resolves, so it flips display back on itself once units.length >= 1.
+function updateSuiteCompareVisibility() {
+  const card = document.getElementById('suiteCompareCard');
+  if (card && getSuiteCompareUnits().length < 1) card.style.display = 'none';
+}
+
+// Sums a lot rows list (from /api/lots — one row per materialType/zone/level/lotType/status
+// combo) down to one Stock/Sold/Balance total per Lot Type, collapsing level/status/zone.
+// Matches the task's simplified Stock/Sold/Balance/Balance% snapshot format rather than a
+// fuller 6-status crosstab (the Zone Summary Matrix above already covers that view).
+function aggregateSnapshotByLotType(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const key = r.lotType || 'Unknown';
+    if (!map.has(key)) map.set(key, { lotType: key, totalStock: 0, totalSold: 0, totalBalance: 0 });
+    const agg = map.get(key);
+    agg.totalStock += r.totalStock;
+    agg.totalSold += r.totalSold;
+    agg.totalBalance += r.totalBalance;
+  }
+  return Array.from(map.values()).sort((a, b) => naturalCompare(a.lotType, b.lotType));
+}
+
+function suiteCompareBalancePct(stock, balance) {
+  return stock > 0 ? `${((balance / stock) * 100).toFixed(1)}%` : '—';
+}
+function suiteCompareBalancePctNum(stock, balance) {
+  return stock > 0 ? Number(((balance / stock) * 100).toFixed(1)) : 0;
+}
+
+// Suite (group, one per compared unit) → Lot Type (its individual sub-rows) → a Subtotal
+// row per suite, plus a grand TOTAL across every suite — same Lot Type/Stock/Sold/Balance
+// shape as each per-suite Snapshot table (renderSuiteComparePanel), just grouped by suite
+// above it instead of shown as separate panels. Single source of truth shared by the
+// on-screen Combined Summary table and both exports, same pattern as computeMatrixData above.
+function buildCombinedSummaryRows() {
+  const groups = suiteCompareRaw.map(u => {
+    const subtotal = {
+      totalStock: u.snapshot.reduce((s, r) => s + r.totalStock, 0),
+      totalSold: u.snapshot.reduce((s, r) => s + r.totalSold, 0),
+      totalBalance: u.snapshot.reduce((s, r) => s + r.totalBalance, 0),
+    };
+    return { unit: u.unit, panelTitle: u.panelTitle, rows: u.snapshot, subtotal };
+  });
+
+  const grandTotal = groups.reduce((acc, g) => ({
+    totalStock: acc.totalStock + g.subtotal.totalStock,
+    totalSold: acc.totalSold + g.subtotal.totalSold,
+    totalBalance: acc.totalBalance + g.subtotal.totalBalance,
+  }), { totalStock: 0, totalSold: 0, totalBalance: 0 });
+
+  return { groups, grandTotal };
+}
+
+function renderCombinedSummaryTable(unitLabel) {
+  if (suiteCompareRaw.length < 2) return '';
+  const { groups, grandTotal } = buildCombinedSummaryRows();
+
+  const bodyRowsHtml = groups.map(g => {
+    // rowCount covers every Lot Type row plus the Subtotal row beneath them — the Suite
+    // cell's rowspan merges across all of it, same "group header spans its rows" shape as
+    // the reference image's top table.
+    const rowCount = g.rows.length + 1;
+    const lotTypeRowsHtml = g.rows.map((r, i) => `
+      <tr>
+        ${i === 0 ? `<td rowspan="${rowCount}" class="suite-compare-group-cell">${escapeHtml(g.unit)}</td>` : ''}
+        <td style="text-align:left">${escapeHtml(r.lotType)}</td>
+        <td>${fmt(r.totalStock)}</td>
+        <td>${fmt(r.totalSold)}</td>
+        <td>${fmt(r.totalBalance)}</td>
+        <td>${suiteCompareBalancePct(r.totalStock, r.totalBalance)}</td>
+      </tr>`).join('');
+
+    const subtotalRowHtml = `
+      <tr class="suite-compare-subtotal">
+        ${g.rows.length === 0 ? `<td rowspan="1" class="suite-compare-group-cell">${escapeHtml(g.unit)}</td>` : ''}
+        <td style="text-align:left">Subtotal</td>
+        <td>${fmt(g.subtotal.totalStock)}</td>
+        <td>${fmt(g.subtotal.totalSold)}</td>
+        <td>${fmt(g.subtotal.totalBalance)}</td>
+        <td>${suiteCompareBalancePct(g.subtotal.totalStock, g.subtotal.totalBalance)}</td>
+      </tr>`;
+
+    return lotTypeRowsHtml + subtotalRowHtml;
+  }).join('');
+
+  return `
+    <div class="suite-compare-panel suite-compare-summary">
+      <div class="suite-compare-panel-header">Combined Summary</div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th style="text-align:left">${escapeHtml(unitLabel)}</th><th style="text-align:left">Lot Type</th><th>Stock Units</th><th>Sold Units</th><th>Balance Units</th><th>Balance Units %</th></tr></thead>
+          <tbody>
+            ${bodyRowsHtml}
+            <tr class="suite-compare-total">
+              <td colspan="2">TOTAL</td>
+              <td>${fmt(grandTotal.totalStock)}</td>
+              <td>${fmt(grandTotal.totalSold)}</td>
+              <td>${fmt(grandTotal.totalBalance)}</td>
+              <td>${suiteCompareBalancePct(grandTotal.totalStock, grandTotal.totalBalance)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+async function fetchSuiteCompareSnapshot(filters) {
+  try {
+    const res = await fetch('/api/lots', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...filters, bigLotFilter: window.bigLotFilter }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.rows || [];
+  } catch (e) {
+    console.error('[dashboard] fetchSuiteCompareSnapshot failed:', e);
+    return [];
+  }
+}
+
+async function fetchSuiteCompareTrend(filters) {
+  try {
+    const res = await fetch('/api/velocity/sales', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...filters, splitBy: 'lotType', bigLotFilter: window.bigLotFilter }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.series || [];
+  } catch (e) {
+    console.error('[dashboard] fetchSuiteCompareTrend failed:', e);
+    return [];
+  }
+}
+
+function suiteComparePanelLabel(branch, zone, materialType, unitLabel, unitKind) {
+  const branchLabel = joinOrAll(branch, 'All');
+  if (unitKind === 'suiteNo') {
+    const zoneLabel = joinOrAll(zone, 'All');
+    return `${branchLabel} — ${zoneLabel} — Suite ${unitLabel}`;
+  }
+  const productLabel = joinOrAll(materialType.map(stripNVPrefix), 'All');
+  return `${branchLabel} — ${productLabel} — Zone ${unitLabel}`;
+}
+
+async function renderSuiteCompare() {
+  const card = document.getElementById('suiteCompareCard');
+  const body = document.getElementById('suiteCompareBody');
+  if (!body) return;
+  if (card) card.style.display = '';
+  body.innerHTML = `<div style="padding:1rem;color:var(--muted)">Loading…</div>`;
+
+  const materialType = lotFilters.materialType.getValues();
+  const branch = lotFilters.branch.getValues();
+  const zone = lotFilters.zone.getValues();
+  const priceRange = lotFilters.priceRange.getValues();
+  const status = lotFilters.status.getValues();
+  const lotType = lotFilters.lotType.getValues();
+  const unitKind = getSuiteCompareUnitKind();
+  const units = getSuiteCompareUnits();
+
+  const unitWord = unitKind === 'suiteNo' ? 'Suite' : 'Zone';
+  const titleEl = document.getElementById('suiteCompareTitle');
+  if (titleEl) titleEl.textContent = units.length >= 2 ? `Side-by-Side ${unitWord} Comparison` : `${unitWord} Snapshot`;
+
+  suiteCompareRaw = await Promise.all(units.map(async (unit) => {
+    const snapshotFilters = {
+      materialType, branch, priceRange, status, lotType,
+      zone: unitKind === 'zone' ? [unit] : zone,
+    };
+    if (unitKind === 'suiteNo') snapshotFilters.suiteNo = [unit];
+    const snapshotRows = await fetchSuiteCompareSnapshot(snapshotFilters);
+
+    // Sales Velocity's filters have no Price Range dimension (routes/velocity.js's
+    // FILTER_COLUMNS omits it app-wide) — priceRange only narrows the Snapshot query above.
+    const trendFilters = {
+      branch, productType: materialType, lotType,
+      zone: unitKind === 'zone' ? [unit] : zone,
+    };
+    if (unitKind === 'suiteNo') trendFilters.suiteNo = [unit];
+    const trendSeries = await fetchSuiteCompareTrend(trendFilters);
+
+    return {
+      unit,
+      panelTitle: suiteComparePanelLabel(branch, zone, materialType, unit, unitKind),
+      snapshot: aggregateSnapshotByLotType(snapshotRows),
+      trendSeries,
+    };
+  }));
+
+  renderSuiteComparePanels();
+}
+
+function suiteComparePeriodBounds() {
+  if (suiteComparePeriod === 'all') return { from: null, to: null };
+  const months = cmpMonthUnion(suiteCompareRaw.map(u => u.trendSeries));
+  const maxYm = months.length ? months[months.length - 1] : null;
+  const monthsBack = { '6m': 5, '12m': 11, '24m': 23 }[suiteComparePeriod];
+  if (!maxYm || monthsBack === undefined) return { from: null, to: null };
+  return { from: cmpYmAddMonths(maxYm, -monthsBack), to: maxYm };
+}
+
+// Lot Type (rows) × Month (columns) for one unit's trendSeries, plus a TOTAL row summing
+// across Lot Types per month — months is the already period-filtered, oldest-first list.
+function buildTrendRowsForUnit(trendSeries, months) {
+  const byLotType = trendSeries.map(s => ({
+    lotType: s.splitValue,
+    byMonth: new Map(s.points.map(p => [p.yearMonth, p.units])),
+  })).sort((a, b) => naturalCompare(a.lotType, b.lotType));
+
+  const totals = new Map(months.map(m => [m, 0]));
+  byLotType.forEach(lt => {
+    months.forEach(m => totals.set(m, totals.get(m) + (lt.byMonth.get(m) || 0)));
+  });
+
+  return { byLotType, totals };
+}
+
+function renderSuiteComparePanel(unitData, months) {
+  const { panelTitle, snapshot, trendSeries } = unitData;
+
+  const stockTotal = snapshot.reduce((s, r) => s + r.totalStock, 0);
+  const soldTotal = snapshot.reduce((s, r) => s + r.totalSold, 0);
+  const balanceTotal = snapshot.reduce((s, r) => s + r.totalBalance, 0);
+
+  const snapshotRowsHtml = snapshot.map(r => `
+    <tr>
+      <td>${escapeHtml(r.lotType)}</td>
+      <td>${fmt(r.totalStock)}</td>
+      <td>${fmt(r.totalSold)}</td>
+      <td>${fmt(r.totalBalance)}</td>
+      <td>${suiteCompareBalancePct(r.totalStock, r.totalBalance)}</td>
+    </tr>`).join('');
+
+  const snapshotHtml = `
+    <table>
+      <thead><tr><th>Lot Type</th><th>Stock</th><th>Sold</th><th>Balance</th><th>Balance %</th></tr></thead>
+      <tbody>
+        ${snapshotRowsHtml || `<tr><td colspan="5" style="text-align:center;color:var(--muted)">No data</td></tr>`}
+        ${snapshot.length ? `<tr class="suite-compare-total"><td>TOTAL</td><td>${fmt(stockTotal)}</td><td>${fmt(soldTotal)}</td><td>${fmt(balanceTotal)}</td><td>${suiteCompareBalancePct(stockTotal, balanceTotal)}</td></tr>` : ''}
+      </tbody>
+    </table>`;
+
+  const { byLotType, totals } = buildTrendRowsForUnit(trendSeries, months);
+  const trendHeadHtml = `<tr><th>Lot Type</th>${months.map(m => `<th>${cmpFormatMonth(m)}</th>`).join('')}</tr>`;
+  const trendRowsHtml = byLotType.map(lt => `
+    <tr>
+      <td>${escapeHtml(lt.lotType)}</td>
+      ${months.map(m => `<td>${fmt(lt.byMonth.get(m) || 0)}</td>`).join('')}
+    </tr>`).join('');
+  const trendTotalHtml = `<tr class="suite-compare-total"><td>TOTAL</td>${months.map(m => `<td>${fmt(totals.get(m) || 0)}</td>`).join('')}</tr>`;
+
+  const trendHtml = months.length
+    ? `<div class="table-scroll"><table><thead>${trendHeadHtml}</thead><tbody>${trendRowsHtml}${trendTotalHtml}</tbody></table></div>`
+    : `<div style="color:var(--muted);font-size:0.82rem">No sold lots in this period.</div>`;
+
+  return `
+    <div class="suite-compare-panel">
+      <div class="suite-compare-panel-header">${escapeHtml(panelTitle)}</div>
+      <div class="suite-compare-subtitle">Snapshot</div>
+      ${snapshotHtml}
+      <div class="suite-compare-subtitle">Monthly Sales Trend (Units)</div>
+      ${trendHtml}
+    </div>`;
+}
+
+function renderSuiteComparePanels() {
+  const body = document.getElementById('suiteCompareBody');
+  if (!body) return;
+  if (!suiteCompareRaw.length) {
+    body.innerHTML = `<div style="padding:1rem;color:var(--muted)">No units selected.</div>`;
+    return;
+  }
+  const { from, to } = suiteComparePeriodBounds();
+  const allMonths = cmpMonthUnion(suiteCompareRaw.map(u => u.trendSeries));
+  const months = allMonths.filter(m => (!from || m >= from) && (!to || m <= to));
+  const unitLabel = getSuiteCompareUnitKind() === 'suiteNo' ? 'Suite' : 'Zone';
+
+  const summaryHtml = renderCombinedSummaryTable(unitLabel);
+  const panelsHtml = `<div class="suite-compare-scroll">${suiteCompareRaw.map(u => renderSuiteComparePanel(u, months)).join('')}</div>`;
+  body.innerHTML = summaryHtml + panelsHtml;
+}
+
+function initSuiteCompareControls() {
+  const presetBar = document.getElementById('suiteComparePeriodPresets');
+  presetBar?.querySelector(`button[data-period="${suiteComparePeriod}"]`)?.classList.add('active');
+  presetBar?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-period]');
+    if (!btn) return;
+    presetBar.querySelectorAll('.subtab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    suiteComparePeriod = btn.dataset.period;
+    if (getSuiteCompareUnits().length >= 1) renderSuiteComparePanels();
+  });
+}
+
+function exportSuiteCompareExcel() {
+  if (!suiteCompareRaw.length) { alert('No comparison data to export. Select at least one Suite No or Zone first.'); return; }
+  if (typeof XLSX === 'undefined') { alert('Excel export library failed to load — check your connection and try again.'); return; }
+
+  const { from, to } = suiteComparePeriodBounds();
+  const allMonths = cmpMonthUnion(suiteCompareRaw.map(u => u.trendSeries));
+  const months = allMonths.filter(m => (!from || m >= from) && (!to || m <= to));
+  const unitLabel = getSuiteCompareUnitKind() === 'suiteNo' ? 'Suite' : 'Zone';
+
+  const wb = XLSX.utils.book_new();
+  const usedSheetNames = new Set();
+
+  // ── Combined Summary sheet, first — same grouped Suite → Lot Type → Subtotal rows as the
+  // on-screen table above the panels, with the Suite column merged across each group's rows. ──
+  if (suiteCompareRaw.length >= 2) {
+    const { groups, grandTotal } = buildCombinedSummaryRows();
+    const summaryAoa = [
+      ['Combined Summary'],
+      [],
+      [unitLabel, 'Lot Type', 'Stock Units', 'Sold Units', 'Balance Units', 'Balance Units %'],
+    ];
+    const merges = [];
+    groups.forEach(g => {
+      const groupStartRow = summaryAoa.length;
+      g.rows.forEach(r => {
+        summaryAoa.push([g.unit, r.lotType, r.totalStock, r.totalSold, r.totalBalance, suiteCompareBalancePctNum(r.totalStock, r.totalBalance)]);
+      });
+      summaryAoa.push([g.unit, 'Subtotal', g.subtotal.totalStock, g.subtotal.totalSold, g.subtotal.totalBalance, suiteCompareBalancePctNum(g.subtotal.totalStock, g.subtotal.totalBalance)]);
+      const groupEndRow = summaryAoa.length - 1;
+      if (groupEndRow > groupStartRow) merges.push({ s: { r: groupStartRow, c: 0 }, e: { r: groupEndRow, c: 0 } });
+    });
+    summaryAoa.push(['TOTAL', '', grandTotal.totalStock, grandTotal.totalSold, grandTotal.totalBalance, suiteCompareBalancePctNum(grandTotal.totalStock, grandTotal.totalBalance)]);
+
+    const summaryWs = XLSX.utils.aoa_to_sheet(summaryAoa);
+    if (merges.length) summaryWs['!merges'] = merges;
+    summaryWs['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 15 }];
+    XLSX.utils.book_append_sheet(wb, summaryWs, 'Combined Summary');
+    usedSheetNames.add('Combined Summary');
+  }
+
+  suiteCompareRaw.forEach((u) => {
+    const stockTotal = u.snapshot.reduce((s, r) => s + r.totalStock, 0);
+    const soldTotal = u.snapshot.reduce((s, r) => s + r.totalSold, 0);
+    const balanceTotal = u.snapshot.reduce((s, r) => s + r.totalBalance, 0);
+
+    const { byLotType, totals } = buildTrendRowsForUnit(u.trendSeries, months);
+
+    const aoa = [
+      [u.panelTitle],
+      [],
+      ['Snapshot'],
+      ['Lot Type', 'Stock', 'Sold', 'Balance', 'Balance %'],
+      ...u.snapshot.map(r => [r.lotType, r.totalStock, r.totalSold, r.totalBalance, suiteCompareBalancePctNum(r.totalStock, r.totalBalance)]),
+      ['TOTAL', stockTotal, soldTotal, balanceTotal, suiteCompareBalancePctNum(stockTotal, balanceTotal)],
+      [],
+      ['Monthly Sales Trend (Units)'],
+      ['Lot Type', ...months.map(cmpFormatMonth)],
+      ...byLotType.map(lt => [lt.lotType, ...months.map(m => lt.byMonth.get(m) || 0)]),
+      ['TOTAL', ...months.map(m => totals.get(m) || 0)],
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 16 }, ...months.map(() => ({ wch: 12 }))];
+    // Excel sheet names cap at 31 chars and forbid \/?*[] — dedupe in case two units happen
+    // to sanitize down to the same name (e.g. codes differing only by a stripped character).
+    let sheetName = String(u.unit).replace(/[\\/?*[\]:]/g, '_').slice(0, 31) || 'Sheet';
+    let n = 2;
+    while (usedSheetNames.has(sheetName)) { sheetName = `${String(u.unit).slice(0, 28)}_${n++}`; }
+    usedSheetNames.add(sheetName);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  });
+
+  XLSX.writeFile(wb, `suite_comparison_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+// Same jsPDF + jspdf-autotable pattern as exportMatrixPDF/exportVelocityPDF: landscape A4,
+// title/timestamp header, autoTable body(s), "Confidential" footer stamped on every page.
+// Combined Summary goes on page 1; each suite then gets its own page (Snapshot table above
+// Monthly Trend, stacked via lastAutoTable.finalY) so suites stay visually separated even
+// when a suite's Lot Type list or month range is long enough to spill onto extra pages.
+function exportSuiteComparePDF() {
+  if (!suiteCompareRaw.length) { alert('No comparison data to export. Select at least one Suite No or Zone first.'); return; }
+  if (typeof window.jspdf === 'undefined') { alert('PDF export library failed to load — check your connection and try again.'); return; }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+  const margin = 40;
+
+  const materialType = lotFilters.materialType.getValues();
+  const branch = lotFilters.branch.getValues();
+  const zone = lotFilters.zone.getValues();
+  const unitKind = getSuiteCompareUnitKind();
+  const unitLabel = unitKind === 'suiteNo' ? 'Suite' : 'Zone';
+  const branchLabel = joinOrAll(branch, 'All');
+  const productLabel = joinOrAll(materialType.map(stripNVPrefix), 'All');
+  const zoneLabel = joinOrAll(zone, 'All');
+  const unitsList = suiteCompareRaw.map(u => u.unit).join(', ');
+
+  const titleText = `Suite Comparison — ${branchLabel} — ${productLabel} — Zone ${zoneLabel}`;
+  const subtitleText = `Compared ${unitLabel}s: ${unitsList}`;
+
+  const drawHeader = () => {
+    doc.setFontSize(14);
+    doc.setTextColor(26, 44, 91);
+    doc.text(titleText, margin, 36);
+    doc.setFontSize(9);
+    doc.setTextColor(107, 114, 128);
+    doc.text(subtitleText, margin, 52);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, margin, 66);
+  };
+
+  const drawFooter = () => {
+    const pageHeight = doc.internal.pageSize.getHeight();
+    doc.setFontSize(8);
+    doc.setTextColor(107, 114, 128);
+    doc.text('Confidential — Nirvana Asia Group Central Region', margin, pageHeight - 18);
+  };
+
+  const tableDefaults = {
+    styles: { fontSize: 8, cellPadding: 4, valign: 'middle', halign: 'center' },
+    headStyles: { fillColor: [26, 44, 91], textColor: [255, 255, 255] },
+    footStyles: { fillColor: [219, 227, 245], textColor: [26, 44, 91], fontStyle: 'bold' },
+    columnStyles: { 0: { fontStyle: 'bold' } },
+    didDrawPage: drawFooter,
+  };
+
+  drawHeader();
+
+  // ── Combined Summary (page 1) — same grouped Suite → Lot Type → Subtotal rows as the
+  // on-screen table, with the Suite column merged (rowSpan) across each group's rows. ──
+  if (suiteCompareRaw.length >= 2) {
+    const { groups, grandTotal } = buildCombinedSummaryRows();
+    doc.setFontSize(11);
+    doc.setTextColor(26, 44, 91);
+    doc.text('Combined Summary', margin, 90);
+
+    const subtotalStyle = { fontStyle: 'bold', fillColor: [240, 243, 250] };
+    const styledCell = (content) => ({ content, styles: subtotalStyle });
+    const summaryBody = [];
+    groups.forEach(g => {
+      const rowCount = g.rows.length + 1;
+      g.rows.forEach((r, i) => {
+        const cells = [r.lotType, fmt(r.totalStock), fmt(r.totalSold), fmt(r.totalBalance), suiteCompareBalancePct(r.totalStock, r.totalBalance)];
+        if (i === 0) cells.unshift({ content: g.unit, rowSpan: rowCount, styles: { valign: 'middle', fontStyle: 'bold' } });
+        summaryBody.push(cells);
+      });
+      const subtotalCells = [styledCell('Subtotal'), styledCell(fmt(g.subtotal.totalStock)), styledCell(fmt(g.subtotal.totalSold)), styledCell(fmt(g.subtotal.totalBalance)), styledCell(suiteCompareBalancePct(g.subtotal.totalStock, g.subtotal.totalBalance))];
+      if (g.rows.length === 0) subtotalCells.unshift({ content: g.unit, rowSpan: 1, styles: { valign: 'middle', fontStyle: 'bold', ...subtotalStyle } });
+      summaryBody.push(subtotalCells);
+    });
+
+    doc.autoTable({
+      ...tableDefaults,
+      startY: 98,
+      head: [[unitLabel, 'Lot Type', 'Stock Units', 'Sold Units', 'Balance Units', 'Balance Units %']],
+      body: summaryBody,
+      foot: [[{ content: 'TOTAL', colSpan: 2 }, fmt(grandTotal.totalStock), fmt(grandTotal.totalSold), fmt(grandTotal.totalBalance), suiteCompareBalancePct(grandTotal.totalStock, grandTotal.totalBalance)]],
+      columnStyles: { 0: { fontStyle: 'bold', halign: 'left' }, 1: { halign: 'left' } },
+    });
+  }
+
+  // ── Per-suite Snapshot + Monthly Trend, one suite per page ──
+  const { from, to } = suiteComparePeriodBounds();
+  const allMonths = cmpMonthUnion(suiteCompareRaw.map(u => u.trendSeries));
+  const months = allMonths.filter(m => (!from || m >= from) && (!to || m <= to));
+
+  suiteCompareRaw.forEach((u) => {
+    doc.addPage();
+    drawHeader();
+
+    doc.setFontSize(12);
+    doc.setTextColor(26, 44, 91);
+    doc.text(u.panelTitle, margin, 90);
+
+    const stockTotal = u.snapshot.reduce((s, r) => s + r.totalStock, 0);
+    const soldTotal = u.snapshot.reduce((s, r) => s + r.totalSold, 0);
+    const balanceTotal = u.snapshot.reduce((s, r) => s + r.totalBalance, 0);
+
+    doc.setFontSize(10);
+    doc.setTextColor(26, 44, 91);
+    doc.text('Snapshot', margin, 110);
+    doc.autoTable({
+      ...tableDefaults,
+      startY: 118,
+      tableWidth: 380,
+      head: [['Lot Type', 'Stock', 'Sold', 'Balance', 'Balance %']],
+      body: u.snapshot.map(r => [r.lotType, fmt(r.totalStock), fmt(r.totalSold), fmt(r.totalBalance), suiteCompareBalancePct(r.totalStock, r.totalBalance)]),
+      foot: [['TOTAL', fmt(stockTotal), fmt(soldTotal), fmt(balanceTotal), suiteCompareBalancePct(stockTotal, balanceTotal)]],
+    });
+
+    const { byLotType, totals: monthTotals } = buildTrendRowsForUnit(u.trendSeries, months);
+    const trendStartY = doc.lastAutoTable.finalY + 28;
+    doc.setFontSize(10);
+    doc.setTextColor(26, 44, 91);
+    doc.text('Monthly Sales Trend (Units)', margin, trendStartY - 8);
+    doc.autoTable({
+      ...tableDefaults,
+      startY: trendStartY,
+      head: [['Lot Type', ...months.map(cmpFormatMonth)]],
+      body: byLotType.map(lt => [lt.lotType, ...months.map(m => fmt(lt.byMonth.get(m) || 0))]),
+      foot: [['TOTAL', ...months.map(m => fmt(monthTotals.get(m) || 0))]],
+    });
+  });
+
+  const branchPart = filenamePart(branch);
+  const zonePart = filenamePart(zone);
+  doc.save(`Suite_Comparison_${branchPart}_${zonePart}_${fileTimestamp()}.pdf`);
+}
+
 initLotFilters();
 initLotResultsEvents();
+initSuiteCompareControls();
 
 window.renderLotDrillDown = renderLotDrillDown;
 window.exportLotsCSV = exportLotsCSV;
 window.exportMatrixExcel = exportMatrixExcel;
 window.exportMatrixPDF = exportMatrixPDF;
+window.exportSuiteCompareExcel = exportSuiteCompareExcel;
+window.exportSuiteComparePDF = exportSuiteComparePDF;
 
 // ── Pricing Intelligence ──
 const PRICING_CATEGORY_META = {
