@@ -355,6 +355,28 @@
             </button>
           </div>
         </div>
+        <div class="matrix-toggle-row" id="suiteCompareViewRow" style="display:none;">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label">View</label>
+            <div class="subtab-bar" id="suiteCompareViewToggle">
+              <button type="button" class="subtab active" data-view="zoneSnapshot">Zone Snapshot</button>
+              <button type="button" class="subtab" data-view="bySuite">By Suite</button>
+            </div>
+          </div>
+        </div>
+        <div class="matrix-toggle-row" id="suiteCompareScopeRow" style="display:none;">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label">Show Snapshot For</label>
+            <div class="subtab-bar" id="suiteCompareScopeToggle">
+              <button type="button" class="subtab active" data-scope="all">All Suites</button>
+              <button type="button" class="subtab" data-scope="specific">Select Specific Suites</button>
+            </div>
+          </div>
+          <div class="lot-filter-field" id="suiteCompareScopeField" style="display:none;">
+            <label class="lot-filter-label" for="suiteCompareScopeMs">Suites to Show</label>
+            <div class="ms" id="suiteCompareScopeMs"></div>
+          </div>
+        </div>
         <div id="suiteCompareBody"></div>
       </div>
 
