@@ -10,6 +10,20 @@ df = pd.read_excel(
 )
 print(f"Loaded {len(df)} rows, {len(df.columns)} columns")
 
+# Source-system "Lot Type" spelling typos that recur on every monthly extract (not something
+# fixable permanently in our database, since master_stock gets fully replaced by the next
+# upload) — corrected here so every future load self-heals instead of needing a manual one-time
+# SQL fix each month. Add further variants here if the source system introduces new ones.
+LOT_TYPE_CORRECTIONS = {
+    'TWIIN DOUBLE': 'TWIN DOUBLE',
+    'ROYAL FAMLIY': 'ROYAL FAMILY',
+}
+if 'Lot Type' in df.columns:
+    corrected = df['Lot Type'].isin(LOT_TYPE_CORRECTIONS.keys()).sum()
+    if corrected:
+        df['Lot Type'] = df['Lot Type'].replace(LOT_TYPE_CORRECTIONS)
+        print(f"Normalized {corrected} row(s) with a known Lot Type spelling typo")
+
 conn = sqlite3.connect('/root/analyst/data/stock.db')
 df.to_sql('master_stock', conn, if_exists='replace', index=False)
 # Only master_stock is ever replaced by a monthly update — every other table (monthly_snapshots,
