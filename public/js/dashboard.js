@@ -1540,6 +1540,7 @@ class MultiSelect {
   }
 
   getValues() { return [...this.selected]; }
+  getOptions() { return [...this.options]; }
 }
 
 function escapeHtml(s) {
@@ -1674,11 +1675,23 @@ async function refreshLotLocationFields() {
   const zone = lotFilters.zone.getValues();
   const priceRange = lotFilters.priceRange.getValues();
 
+  // Suite No availability is checked for every selection regardless of structured/flat mode —
+  // some structured suites (NV EBL, certain Niche zones) have 0% Suite No population same as
+  // flat-land types do structurally, and getSuiteCompareUnitKind() below needs the real answer
+  // for this Branch+Zone+Product Type combo, not a product-type assumption.
+  //
+  // Only reset the View/scope controls when the suite list itself actually changed (Branch/
+  // Zone/Product Type/Price Range) — this same function also re-runs on Suite No/Section's own
+  // onChange (a pick within the main filter doesn't change what suites exist), and resetting on
+  // every one of those would wipe a user's View/"Select Specific Suites" pick mid-browse for no
+  // reason.
+  const previousSuiteOptions = lotFilters.suiteNo.getOptions();
+  const { suites, statuses: suiteStatuses } = await fetchLotSuites(branch, zone, materialType, priceRange);
+  lotFilters.suiteNo.setOptions(suites);
+  if (!sameOptionList(previousSuiteOptions, suites)) resetSuiteCompareControls(suites);
+
   let suiteNo = [];
   if (mode === 'structured') {
-    const { suites, statuses: suiteStatuses } = await fetchLotSuites(branch, zone, materialType, priceRange);
-    lotFilters.suiteNo.setOptions(suites);
-
     suiteNo = lotFilters.suiteNo.getValues();
     const { sections, statuses: sectionStatuses } = await fetchLotSections(branch, zone, suiteNo, materialType, priceRange);
     lotFilters.section.setOptions(sections);
@@ -1878,10 +1891,13 @@ document.getElementById('matrixHeadRow')?.addEventListener('click', (e) => {
 });
 
 // ── Side-by-Side Suite/Zone Comparison ──
-// Shown automatically once 1+ Suite No values are selected (structured product types) or 1+
-// Zone values (flat-land types) — one panel per selected value, each with its own Snapshot
-// and Monthly Sales Trend tables. A single selection renders one panel (no "comparison" in the
-// combined-summary sense — that stays gated to 2+ inside renderCombinedSummaryTable); 2+
+// Shown automatically once 1+ Suite No values are selected (when the current Branch+Zone+
+// Product Type selection actually has Suite No data) or 1+ Zone values (when it doesn't —
+// flat-land types always, plus any structured selection with 0% Suite No population, e.g.
+// NV EBL or a suite-less Niche zone; see getSuiteCompareUnitKind) — one panel per selected
+// value, each with its own Snapshot and Monthly Sales Trend tables. A single selection renders
+// one panel (no "comparison" in the combined-summary sense — that stays gated to 2+ inside
+// renderCombinedSummaryTable); 2+
 // selections render the existing side-by-side view unchanged. Own small copy of Sales
 // Velocity's month math/period-preset pattern (velocity.js loads after this file, and
 // dashboard.js already duplicates this kind of helper per-tab — see formatTrendMonth above —
@@ -1910,26 +1926,117 @@ function cmpMonthUnion(seriesList) {
 let suiteComparePeriod = '6m'; // '6m' | '12m' | '24m' | 'all'
 let suiteCompareRaw = []; // [{ unit, panelTitle, snapshot, trendSeries }] — unfiltered by period
 
-// A "unit" is one Suite No (structured) or one Zone (flat) selected in the Lot Drill-Down
-// filters — the thing each side-by-side panel represents.
+// ── "View: Zone Snapshot | By Suite" + nested "Show Snapshot For" scope selector ──
+// A zone with real Suite No data (kind === 'suiteNo') can be viewed two ways: 'zoneSnapshot'
+// (default — one combined table per zone, summed across every suite in it, same aggregation
+// aggregateSnapshotByLotType already does for the Zone-keyed fallback below) or 'bySuite' (one
+// panel per individual Suite No, the pre-existing behavior). Only 'bySuite' has a further
+// narrowing step — the "Show Snapshot For" scope, purely a display filter over suiteCompareRaw's
+// already-fetched units (see visibleSuiteCompareUnits) that never re-fetches and never touches
+// Lot Results/the Zone Summary Matrix/CSV export. Both reset via resetSuiteCompareControls
+// whenever Branch/Zone/Product Type (or Price Range) changes the underlying suite list — see its
+// call site in refreshLotLocationFields.
+let suiteCompareViewMode = 'zoneSnapshot'; // 'zoneSnapshot' | 'bySuite' — only meaningful when kind === 'suiteNo'
+let suiteCompareScopeMode = 'all'; // 'all' | 'specific' — only meaningful in 'bySuite' view
+let suiteCompareScopeSelection = []; // subset of suite values picked while in 'specific' scope
+let suiteCompareScopeUI = null; // MultiSelect — options mirror lotFilters.suiteNo's full option list
+
+// A "unit" is one Suite No or one Zone selected in the Lot Drill-Down filters — the thing
+// each side-by-side panel represents. Keyed off whether real Suite No data exists for the
+// current Branch+Zone+Product Type selection (lotFilters.suiteNo's options, refreshed by
+// refreshLotLocationFields for every mode) rather than the structured/flat product-type
+// split — some structured types (NV EBL, certain Niche zones) have 0% Suite No population
+// same as flat-land types do, so they need the Zone-keyed fallback too.
 function getSuiteCompareUnitKind() {
   const materialType = lotFilters.materialType.getValues();
   const mode = modeForSelection(materialType);
-  return mode === 'structured' ? 'suiteNo' : mode === 'flat' ? 'zone' : null;
+  if (!mode) return null;
+  return lotFilters.suiteNo.getOptions().length > 0 ? 'suiteNo' : 'zone';
 }
 
+// True only for real Suite No data being viewed one-panel-per-suite ('bySuite') — as opposed
+// to 'zoneSnapshot' (same suite data, aggregated to one zone-wide table) or the Zone-keyed
+// fallback (no suite data at all). Centralizes the three-way check every render/export path
+// below needs instead of each re-deriving it.
+function suiteCompareIsBySuite() {
+  return getSuiteCompareUnitKind() === 'suiteNo' && suiteCompareViewMode === 'bySuite';
+}
+function suiteCompareUnitWord() {
+  return suiteCompareIsBySuite() ? 'Suite' : 'Zone';
+}
+
+// The units to fetch/compare right now: one Suite No per panel in 'bySuite' view, one Zone per
+// panel otherwise — the Zone-keyed fallback (no suite data) or 'zoneSnapshot' view (suite data
+// exists, but aggregated to one table per zone rather than one per suite).
 function getSuiteCompareUnits() {
   const kind = getSuiteCompareUnitKind();
   if (!kind) return [];
-  return kind === 'suiteNo' ? lotFilters.suiteNo.getValues() : lotFilters.zone.getValues();
+  return suiteCompareIsBySuite() ? lotFilters.suiteNo.getValues() : lotFilters.zone.getValues();
 }
 
-// Hides the card the moment the selection drops below 1 unit (e.g. Suite No cleared).
-// Showing it is renderSuiteCompare's job — it only knows there's something to show once
-// its data fetch resolves, so it flips display back on itself once units.length >= 1.
+// Hides the card the moment the selection drops below 1 unit (e.g. Zone cleared in Zone
+// Snapshot view, or Suite No cleared in By Suite view). Showing it is renderSuiteCompare's
+// job — it only knows there's something to show once its data fetch resolves, so it flips
+// display back on itself once units.length >= 1.
 function updateSuiteCompareVisibility() {
   const card = document.getElementById('suiteCompareCard');
   if (card && getSuiteCompareUnits().length < 1) card.style.display = 'none';
+  updateSuiteCompareViewRowVisibility();
+  updateSuiteCompareScopeRowVisibility();
+}
+
+// The View toggle only makes sense once there's a real Suite No list to choose a view over —
+// hidden for the Zone-keyed fallback (flat-land, or a structured selection with 0% Suite No
+// population), which already shows a single zone-level table with no view to switch.
+function updateSuiteCompareViewRowVisibility() {
+  const row = document.getElementById('suiteCompareViewRow');
+  if (row) row.style.display = getSuiteCompareUnitKind() === 'suiteNo' ? '' : 'none';
+}
+
+// The nested scope selector only applies within 'bySuite' view — 'zoneSnapshot' has nothing
+// suite-level to narrow (suiteCompareRaw's units are Zone values there, not Suite No values).
+function updateSuiteCompareScopeRowVisibility() {
+  const row = document.getElementById('suiteCompareScopeRow');
+  if (row) row.style.display = suiteCompareIsBySuite() ? '' : 'none';
+}
+
+// Both option lists come from the same ORDER BY val query, so a plain index-wise compare is
+// enough — no need to sort first.
+function sameOptionList(a, b) {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+// Called whenever refreshLotLocationFields refreshes the real Suite No option list (Branch/
+// Zone/Product Type/Price Range change) — the previously picked view/subset almost certainly no
+// longer matches the new zone's suites, so silently carrying it over would misleadingly narrow
+// (or empty out) the next Snapshot render. Resetting to 'Zone Snapshot' / 'All Suites' is the
+// same "don't guess, show the sensible default until the user narrows again" pattern the rest
+// of Lot Drill-Down uses.
+function resetSuiteCompareControls(suiteOptions = []) {
+  suiteCompareViewMode = 'zoneSnapshot';
+  const viewToggle = document.getElementById('suiteCompareViewToggle');
+  viewToggle?.querySelectorAll('.subtab').forEach(b => b.classList.toggle('active', b.dataset.view === 'zoneSnapshot'));
+
+  suiteCompareScopeMode = 'all';
+  suiteCompareScopeSelection = [];
+  const scopeToggle = document.getElementById('suiteCompareScopeToggle');
+  scopeToggle?.querySelectorAll('.subtab').forEach(b => b.classList.toggle('active', b.dataset.scope === 'all'));
+  const scopeField = document.getElementById('suiteCompareScopeField');
+  if (scopeField) scopeField.style.display = 'none';
+  suiteCompareScopeUI?.setOptions(suiteOptions, { preserveSelection: false });
+
+  updateSuiteCompareViewRowVisibility();
+  updateSuiteCompareScopeRowVisibility();
+}
+
+// The units actually rendered — suiteCompareRaw filtered down to the scope selector's picks
+// while in 'bySuite' view + 'specific' scope, or every fetched unit otherwise ('zoneSnapshot'
+// view, 'all' scope, or the Zone-keyed case where neither applies). Exports intentionally read
+// suiteCompareRaw directly rather than this, so they keep covering every fetched unit
+// regardless of the on-screen scope narrowing.
+function visibleSuiteCompareUnits() {
+  if (!suiteCompareIsBySuite() || suiteCompareScopeMode !== 'specific') return suiteCompareRaw;
+  return suiteCompareRaw.filter(u => suiteCompareScopeSelection.includes(u.unit));
 }
 
 // Sums a lot rows list (from /api/lots — one row per materialType/zone/level/lotType/status
@@ -1961,8 +2068,10 @@ function suiteCompareBalancePctNum(stock, balance) {
 // shape as each per-suite Snapshot table (renderSuiteComparePanel), just grouped by suite
 // above it instead of shown as separate panels. Single source of truth shared by the
 // on-screen Combined Summary table and both exports, same pattern as computeMatrixData above.
-function buildCombinedSummaryRows() {
-  const groups = suiteCompareRaw.map(u => {
+// units defaults to every fetched unit (what the exports want); the on-screen render passes
+// visibleSuiteCompareUnits() instead, so the summary reflects the "Show Snapshot For" narrowing.
+function buildCombinedSummaryRows(units = suiteCompareRaw) {
+  const groups = units.map(u => {
     const subtotal = {
       totalStock: u.snapshot.reduce((s, r) => s + r.totalStock, 0),
       totalSold: u.snapshot.reduce((s, r) => s + r.totalSold, 0),
@@ -1980,9 +2089,9 @@ function buildCombinedSummaryRows() {
   return { groups, grandTotal };
 }
 
-function renderCombinedSummaryTable(unitLabel) {
-  if (suiteCompareRaw.length < 2) return '';
-  const { groups, grandTotal } = buildCombinedSummaryRows();
+function renderCombinedSummaryTable(unitLabel, units = suiteCompareRaw) {
+  if (units.length < 2) return '';
+  const { groups, grandTotal } = buildCombinedSummaryRows(units);
 
   const bodyRowsHtml = groups.map(g => {
     // rowCount covers every Lot Type row plus the Subtotal row beneath them — the Suite
@@ -2075,11 +2184,22 @@ function suiteComparePanelLabel(branch, zone, materialType, unitLabel, unitKind)
   return `${branchLabel} — ${productLabel} — Zone ${unitLabel}`;
 }
 
+// 'zoneSnapshot' view's panel header — distinct from suiteComparePanelLabel's Zone-keyed
+// fallback wording so it's clear this is a real Suite No zone being deliberately aggregated,
+// not a zone that simply has no suite data.
+function suiteZoneSnapshotLabel(branch, zoneValue, suiteCount) {
+  const branchLabel = joinOrAll(branch, 'All');
+  const suiteWord = suiteCount === 1 ? 'suite' : 'suites';
+  return `${branchLabel} — ${zoneValue} — Zone Snapshot (all ${suiteCount} ${suiteWord} combined)`;
+}
+
 async function renderSuiteCompare() {
   const card = document.getElementById('suiteCompareCard');
   const body = document.getElementById('suiteCompareBody');
   if (!body) return;
   if (card) card.style.display = '';
+  updateSuiteCompareViewRowVisibility();
+  updateSuiteCompareScopeRowVisibility();
   body.innerHTML = `<div style="padding:1rem;color:var(--muted)">Loading…</div>`;
 
   const materialType = lotFilters.materialType.getValues();
@@ -2089,32 +2209,35 @@ async function renderSuiteCompare() {
   const status = lotFilters.status.getValues();
   const lotType = lotFilters.lotType.getValues();
   const unitKind = getSuiteCompareUnitKind();
+  // Real Suite No data exists, but the user wants it aggregated to one table per zone rather
+  // than one panel per suite — fetch/filter exactly like the Zone-keyed fallback below (no
+  // suiteNo filter, one unit per selected Zone), just with a distinct panel label.
+  const useZoneAggregate = unitKind === 'suiteNo' && suiteCompareViewMode === 'zoneSnapshot';
   const units = getSuiteCompareUnits();
 
-  const unitWord = unitKind === 'suiteNo' ? 'Suite' : 'Zone';
-  const titleEl = document.getElementById('suiteCompareTitle');
-  if (titleEl) titleEl.textContent = units.length >= 2 ? `Side-by-Side ${unitWord} Comparison` : `${unitWord} Snapshot`;
-
   suiteCompareRaw = await Promise.all(units.map(async (unit) => {
-    const snapshotFilters = {
-      materialType, branch, priceRange, status, lotType,
-      zone: unitKind === 'zone' ? [unit] : zone,
-    };
-    if (unitKind === 'suiteNo') snapshotFilters.suiteNo = [unit];
+    const zoneFilterValue = (unitKind === 'zone' || useZoneAggregate) ? [unit] : zone;
+    const snapshotFilters = { materialType, branch, priceRange, status, lotType, zone: zoneFilterValue };
+    if (unitKind === 'suiteNo' && !useZoneAggregate) snapshotFilters.suiteNo = [unit];
     const snapshotRows = await fetchSuiteCompareSnapshot(snapshotFilters);
 
     // Sales Velocity's filters have no Price Range dimension (routes/velocity.js's
     // FILTER_COLUMNS omits it app-wide) — priceRange only narrows the Snapshot query above.
-    const trendFilters = {
-      branch, productType: materialType, lotType,
-      zone: unitKind === 'zone' ? [unit] : zone,
-    };
-    if (unitKind === 'suiteNo') trendFilters.suiteNo = [unit];
+    const trendFilters = { branch, productType: materialType, lotType, zone: zoneFilterValue };
+    if (unitKind === 'suiteNo' && !useZoneAggregate) trendFilters.suiteNo = [unit];
     const trendSeries = await fetchSuiteCompareTrend(trendFilters);
+
+    let panelTitle;
+    if (useZoneAggregate) {
+      const { suites } = await fetchLotSuites(branch, [unit], materialType, priceRange);
+      panelTitle = suiteZoneSnapshotLabel(branch, unit, suites.length);
+    } else {
+      panelTitle = suiteComparePanelLabel(branch, zone, materialType, unit, unitKind);
+    }
 
     return {
       unit,
-      panelTitle: suiteComparePanelLabel(branch, zone, materialType, unit, unitKind),
+      panelTitle,
       snapshot: aggregateSnapshotByLotType(snapshotRows),
       trendSeries,
     };
@@ -2199,17 +2322,23 @@ function renderSuiteComparePanel(unitData, months) {
 function renderSuiteComparePanels() {
   const body = document.getElementById('suiteCompareBody');
   if (!body) return;
-  if (!suiteCompareRaw.length) {
-    body.innerHTML = `<div style="padding:1rem;color:var(--muted)">No units selected.</div>`;
+  const visible = visibleSuiteCompareUnits();
+  const unitWord = suiteCompareUnitWord();
+  const titleEl = document.getElementById('suiteCompareTitle');
+  if (titleEl) titleEl.textContent = visible.length >= 2 ? `Side-by-Side ${unitWord} Comparison` : `${unitWord} Snapshot`;
+
+  if (!visible.length) {
+    body.innerHTML = `<div style="padding:1rem;color:var(--muted)">${
+      suiteCompareRaw.length ? 'No suites selected in the scope above.' : 'No units selected.'
+    }</div>`;
     return;
   }
-  const { from, to } = suiteComparePeriodBounds();
-  const allMonths = cmpMonthUnion(suiteCompareRaw.map(u => u.trendSeries));
+  const { from, to } = suiteComparePeriodBounds(visible);
+  const allMonths = cmpMonthUnion(visible.map(u => u.trendSeries));
   const months = allMonths.filter(m => (!from || m >= from) && (!to || m <= to));
-  const unitLabel = getSuiteCompareUnitKind() === 'suiteNo' ? 'Suite' : 'Zone';
 
-  const summaryHtml = renderCombinedSummaryTable(unitLabel);
-  const panelsHtml = `<div class="suite-compare-scroll">${suiteCompareRaw.map(u => renderSuiteComparePanel(u, months)).join('')}</div>`;
+  const summaryHtml = renderCombinedSummaryTable(unitWord, visible);
+  const panelsHtml = `<div class="suite-compare-scroll">${visible.map(u => renderSuiteComparePanel(u, months)).join('')}</div>`;
   body.innerHTML = summaryHtml + panelsHtml;
 }
 
@@ -2226,6 +2355,55 @@ function initSuiteCompareControls() {
   });
 }
 
+// "Show Snapshot For" — All Suites / Select Specific Suites. Both the toggle and the
+// multi-select only re-render from the already-fetched suiteCompareRaw (see
+// visibleSuiteCompareUnits) — no re-fetch, consistent with the rest of this control group
+// (period presets, matrixLotType) being cheap client-side re-renders.
+// "View: Zone Snapshot | By Suite" — unlike the nested scope selector, switching views changes
+// what actually needs to be fetched (one zone-aggregate query per Zone vs. one query per Suite
+// No), so this re-runs the full renderSuiteCompare() fetch rather than just re-rendering from
+// suiteCompareRaw.
+function initSuiteCompareViewControls() {
+  const toggle = document.getElementById('suiteCompareViewToggle');
+  toggle?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.subtab[data-view]');
+    if (!btn || btn.classList.contains('active')) return;
+    toggle.querySelectorAll('.subtab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    suiteCompareViewMode = btn.dataset.view;
+    updateSuiteCompareScopeRowVisibility();
+    if (getSuiteCompareUnits().length >= 1) {
+      renderSuiteCompare();
+    } else {
+      suiteCompareRaw = [];
+      renderSuiteComparePanels();
+    }
+  });
+}
+
+function initSuiteCompareScopeControls() {
+  suiteCompareScopeUI = new MultiSelect('suiteCompareScopeMs', {
+    placeholder: 'Select suites',
+    emptyText: 'No suites found',
+    onChange: (values) => {
+      suiteCompareScopeSelection = values;
+      renderSuiteComparePanels();
+    },
+  });
+
+  const toggle = document.getElementById('suiteCompareScopeToggle');
+  const field = document.getElementById('suiteCompareScopeField');
+  toggle?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.subtab[data-scope]');
+    if (!btn || btn.classList.contains('active')) return;
+    toggle.querySelectorAll('.subtab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    suiteCompareScopeMode = btn.dataset.scope;
+    if (field) field.style.display = suiteCompareScopeMode === 'specific' ? '' : 'none';
+    renderSuiteComparePanels();
+  });
+}
+
 function exportSuiteCompareExcel() {
   if (!suiteCompareRaw.length) { alert('No comparison data to export. Select at least one Suite No or Zone first.'); return; }
   if (typeof XLSX === 'undefined') { alert('Excel export library failed to load — check your connection and try again.'); return; }
@@ -2233,7 +2411,7 @@ function exportSuiteCompareExcel() {
   const { from, to } = suiteComparePeriodBounds();
   const allMonths = cmpMonthUnion(suiteCompareRaw.map(u => u.trendSeries));
   const months = allMonths.filter(m => (!from || m >= from) && (!to || m <= to));
-  const unitLabel = getSuiteCompareUnitKind() === 'suiteNo' ? 'Suite' : 'Zone';
+  const unitLabel = suiteCompareUnitWord();
 
   const wb = XLSX.utils.book_new();
   const usedSheetNames = new Set();
@@ -2298,7 +2476,7 @@ function exportSuiteCompareExcel() {
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
   });
 
-  XLSX.writeFile(wb, `suite_comparison_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  XLSX.writeFile(wb, `${unitLabel.toLowerCase()}_comparison_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 // Same jsPDF + jspdf-autotable pattern as exportMatrixPDF/exportVelocityPDF: landscape A4,
@@ -2317,14 +2495,13 @@ function exportSuiteComparePDF() {
   const materialType = lotFilters.materialType.getValues();
   const branch = lotFilters.branch.getValues();
   const zone = lotFilters.zone.getValues();
-  const unitKind = getSuiteCompareUnitKind();
-  const unitLabel = unitKind === 'suiteNo' ? 'Suite' : 'Zone';
+  const unitLabel = suiteCompareUnitWord();
   const branchLabel = joinOrAll(branch, 'All');
   const productLabel = joinOrAll(materialType.map(stripNVPrefix), 'All');
   const zoneLabel = joinOrAll(zone, 'All');
   const unitsList = suiteCompareRaw.map(u => u.unit).join(', ');
 
-  const titleText = `Suite Comparison — ${branchLabel} — ${productLabel} — Zone ${zoneLabel}`;
+  const titleText = `${unitLabel} Comparison — ${branchLabel} — ${productLabel} — Zone ${zoneLabel}`;
   const subtitleText = `Compared ${unitLabel}s: ${unitsList}`;
 
   const drawHeader = () => {
@@ -2432,12 +2609,14 @@ function exportSuiteComparePDF() {
 
   const branchPart = filenamePart(branch);
   const zonePart = filenamePart(zone);
-  doc.save(`Suite_Comparison_${branchPart}_${zonePart}_${fileTimestamp()}.pdf`);
+  doc.save(`${unitLabel}_Comparison_${branchPart}_${zonePart}_${fileTimestamp()}.pdf`);
 }
 
 initLotFilters();
 initLotResultsEvents();
 initSuiteCompareControls();
+initSuiteCompareViewControls();
+initSuiteCompareScopeControls();
 
 window.renderLotDrillDown = renderLotDrillDown;
 window.exportLotsCSV = exportLotsCSV;
