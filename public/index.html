@@ -318,7 +318,7 @@
             <label class="lot-filter-label" for="lotLevel">Level</label>
             <div class="ms" id="lotLevel"></div>
           </div>
-          <div class="lot-filter-field flat-only" id="fieldLotType" style="display:none;">
+          <div class="lot-filter-field" id="fieldLotType" style="display:none;">
             <label class="lot-filter-label" for="lotType">Lot Type</label>
             <div class="ms" id="lotType"></div>
           </div>
@@ -337,8 +337,30 @@
           Please refer to the property map for code references.</p>
       </div>
 
+      <div class="table-card" id="suiteCompareCard" style="display:none;">
+        <div class="matrix-toggle-row">
+          <h3 class="table-title" id="suiteCompareTitle">Side-by-Side Suite Comparison</h3>
+          <div class="subtab-bar" id="suiteComparePeriodPresets">
+            <button type="button" class="subtab" data-period="6m">Last 6 Months</button>
+            <button type="button" class="subtab" data-period="12m">Last 12 Months</button>
+            <button type="button" class="subtab" data-period="24m">Last 24 Months</button>
+            <button type="button" class="subtab" data-period="all">All Time</button>
+          </div>
+          <div class="matrix-export-actions">
+            <button class="btn-report" onclick="exportSuiteCompareExcel()">
+              <span>&#128202;</span> Export as Excel
+            </button>
+            <button class="btn-report" onclick="exportSuiteComparePDF()">
+              <span>&#128196;</span> Export as PDF
+            </button>
+          </div>
+        </div>
+        <div id="suiteCompareBody"></div>
+      </div>
+
       <div class="table-card">
         <h3 class="table-title">Lot Results</h3>
+        <div class="drilldown-toolbar" id="lotResultsToolbar"></div>
         <div class="table-scroll">
           <table id="tableLots">
             <thead>
@@ -354,6 +376,12 @@
 
       <div class="table-card" id="lotMatrixCard" style="display:none;">
         <h3 class="table-title" id="lotMatrixTitle">Zone Summary Matrix</h3>
+        <div class="lot-filter-row" id="matrixLotTypeRow" style="display:none;">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label" for="matrixLotType">Lot Type</label>
+            <div class="ms" id="matrixLotType"></div>
+          </div>
+        </div>
         <div class="matrix-header" id="matrixHeader"></div>
         <div class="matrix-toggle-row">
           <label class="matrix-toggle">

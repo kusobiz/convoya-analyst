@@ -307,13 +307,16 @@ export function getLevels(filters = {}) {
   return distinctColumn('Level No', where, params);
 }
 
-// Lot types (flat land branch) are scoped by branch + material type + zone. priceRange is
-// optional on top of that — used by the Pricing Intelligence drill-downs' Lot Type filter,
-// which scopes to one row's exact Product Type + Price Range + Branch combination so it
+// Lot types are scoped by branch + material type + zone + (optionally) suite no. suiteNo lets
+// the main Lot Drill-Down filter narrow Lot Type down to one Suite's actual values (some
+// structured-product suites carry meaningful Lot Types like SINGLE/DOUBLE, others don't) —
+// callers with no suite context (e.g. Pricing Intelligence's per-zone drill-down) just omit it.
+// priceRange is optional on top of that, used by the Pricing Intelligence drill-downs' Lot Type
+// filter, which scopes to one row's exact Product Type + Price Range + Branch combination so it
 // never offers a Lot Type that would return zero results for that row.
 export function getLotTypes(filters = {}) {
-  const { branch, zone, materialType, priceRange, bigLotFilter } = filters;
-  const { where, params } = buildWhere({ branch, zone, materialType, priceRange, bigLotFilter });
+  const { branch, zone, suiteNo, materialType, priceRange, bigLotFilter } = filters;
+  const { where, params } = buildWhere({ branch, zone, suiteNo, materialType, priceRange, bigLotFilter });
   return distinctColumn('Lot Type', where, params);
 }
 
@@ -404,9 +407,9 @@ router.get('/levels', (req, res) => {
 
 router.get('/lotTypes', (req, res) => {
   try {
-    const { branch, zone, materialType, priceRange, bigLotFilter } = req.query;
-    const lotTypes = getLotTypes({ branch, zone, materialType, priceRange, bigLotFilter });
-    const statuses = getStatuses({ branch, zone, materialType, priceRange, bigLotFilter });
+    const { branch, zone, suiteNo, materialType, priceRange, bigLotFilter } = req.query;
+    const lotTypes = getLotTypes({ branch, zone, suiteNo, materialType, priceRange, bigLotFilter });
+    const statuses = getStatuses({ branch, zone, suiteNo, materialType, priceRange, bigLotFilter });
     res.json({ lotTypes, statuses });
   } catch (err) {
     console.error('Lot lotTypes query error:', err.message);
