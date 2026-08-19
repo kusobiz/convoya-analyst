@@ -226,10 +226,11 @@ function nowMonthIndex() {
 // across structured and flat-land types. Per
 // spec: totalUnits/soldUnits/balanceUnits/balanceValue/avgPrice are summed/averaged across every
 // row in the cohort regardless of status; soldByMonth (the cumulative-sell-through curve's
-// raw material) only counts rows with a real sale (Total Sold Case > 0 — unsold OPEN lots
-// carry a placeholder Sales Date equal to Lot Create On and are always excluded here),
-// bucketed by that lot's own monthsSinceLaunch = its Sales Date month index minus its own
-// Lot Create On month index.
+// raw material) only counts rows with a real sale (Total Sold Case > 0 — unsold OPEN/RESERVED
+// lots are always excluded here regardless of what their own Sales Date happens to hold; it's
+// not reliably a placeholder equal to Lot Create On, since it can also get touched on a status
+// change that isn't a sale), bucketed by that lot's own monthsSinceLaunch = its Sales Date
+// month index minus its own Lot Create On month index.
 // Picks the value with the largest weighted count out of a Map(value -> weight) — used for
 // Eye Level, since a cohort's raw rows can carry a mix of "Eye Level"/"Non Eye Level"/blank
 // (unlike Price Range, which is derived from a single avgPrice number), so the cohort's own
@@ -280,10 +281,12 @@ function buildCohortsFromSql(filters) {
     GROUP BY ${COHORT_GROUP_BY}, eyeLevel
   `).all(...params);
 
-  // Sales Date carries a placeholder (= Lot Create On) on never-sold OPEN lots, so restricting to
-  // "Total Sold Case" > 0 excludes those automatically (mirrors the old per-row `if (totalSold >
-  // 0)` guard) — no separate NULL/blank check needed on top, same as the row-based version relied
-  // on parseYYYYMMDD succeeding for every real Lot Create On/Sales Date pair.
+  // "Total Sold Case" > 0 is the only reliable way to exclude never-sold OPEN/RESERVED rows —
+  // their Sales Date isn't a dependable placeholder equal to Lot Create On (it can carry a more
+  // recent date from a non-sale status change), so this mirrors the old per-row `if (totalSold >
+  // 0)` guard directly on the sale signal rather than on Sales Date's shape. No separate
+  // NULL/blank check is needed on top, same as the row-based version relied on parseYYYYMMDD
+  // succeeding for every real Lot Create On/Sales Date pair.
   const soldByMonthRows = getDb().prepare(`
     SELECT
       ${COHORT_GROUP_SELECT},

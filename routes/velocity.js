@@ -18,8 +18,10 @@ function toArray(val) {
   return Array.isArray(val) ? val : [val];
 }
 
-// "Sales Date" is a placeholder equal to "Lot Create On" for unsold OPEN lots — only rows
-// with actual sold cases carry a real sale date, so every query here is scoped to it.
+// "Sales Date" isn't reliably a real sale date on its own — it gets touched on OPEN/RESERVED
+// status changes too (e.g. equal to "Lot Create On" on a never-touched OPEN lot, but often a
+// more recent date on one that's since moved between statuses without selling). "Total Sold
+// Case" > 0 is the only reliable signal of an actual sale, so every query here is scoped to it.
 const SOLD_ONLY = `"Total Sold Case" > 0`;
 
 // Reshape the integer YYYYMMDD "Sales Date" down to a YYYYMM string for monthly grouping.
