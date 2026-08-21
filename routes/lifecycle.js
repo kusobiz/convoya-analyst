@@ -359,15 +359,36 @@ function buildCohortsFromSql(filters) {
   // here can span multiple branches each with their own distinct migration dates. "Total Stock
   // Case" is always 1 per master_stock row (verified against the live data), so summing it here
   // is equivalent to counting lots, matching detectMigrationDates' own COUNT(*)-based threshold.
-  const lotDateRows = getDb().prepare(`
-    SELECT
-      ${COHORT_GROUP_SELECT},
-      CAST("Lot Create On" AS TEXT) AS lotCreateOn,
-      SUM("Total Stock Case") AS units
-    FROM master_stock
-    ${where}
-    GROUP BY ${COHORT_GROUP_BY}, lotCreateOn
-  `).all(...params);
+  //
+  // Only rows whose date is a flagged migration date for SOME branch already present in
+  // totalsRows are grouped here — every other (genuine) date is irrelevant to the migration-
+  // artifact check, so there's no reason to pay for grouping the whole table by its full spread
+  // of distinct dates just to throw almost all of those groups away. detectMigrationDates is
+  // cached per branch (see its own comment), so this costs one Set union over ≤9 branches, not a
+  // query. The date list is a union across branches rather than one query per branch, so a row
+  // can theoretically match a date flagged for a DIFFERENT branch than its own — harmless, since
+  // the accumulation loop below still re-checks detectMigrationDates(r.branch) per row before
+  // counting it, so cross-branch coincidences are simply ignored rather than mis-flagged.
+  const branchesInScope = new Set(totalsRows.map(r => r.branch));
+  const flaggedDatesInScope = new Set();
+  for (const b of branchesInScope) {
+    for (const d of detectMigrationDates(b)) flaggedDatesInScope.add(d);
+  }
+
+  let lotDateRows = [];
+  if (flaggedDatesInScope.size > 0) {
+    const dateList = [...flaggedDatesInScope];
+    const datePlaceholders = dateList.map(() => '?').join(', ');
+    lotDateRows = getDb().prepare(`
+      SELECT
+        ${COHORT_GROUP_SELECT},
+        CAST("Lot Create On" AS TEXT) AS lotCreateOn,
+        SUM("Total Stock Case") AS units
+      FROM master_stock
+      ${where} AND CAST("Lot Create On" AS TEXT) IN (${datePlaceholders})
+      GROUP BY ${COHORT_GROUP_BY}, lotCreateOn
+    `).all(...params, ...dateList);
+  }
 
   const cohortKey = (r) => `${r.branch}|${r.productType}|${r.zone}|${r.suiteNo}|${r.cohortPeriod}`;
 
