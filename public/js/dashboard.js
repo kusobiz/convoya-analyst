@@ -729,7 +729,10 @@ async function loadLotResultRowLotsContent(btn, content) {
       status: [btn.dataset.status],
       lotType,
     };
-    if (btn.dataset.zone !== undefined) filters.zone = [btn.dataset.zone];
+    // Structured rows pin to their own Zone (data-zone); flat rows aren't grouped by Zone
+    // (see renderLotResultViewLotsCell) so — like Branch/Price Range above — fall back to
+    // whatever Zone the filter panel currently has selected instead of silently omitting it.
+    filters.zone = btn.dataset.zone !== undefined ? [btn.dataset.zone] : lotFilters.zone.getValues();
     if (btn.dataset.level !== undefined) filters.level = [btn.dataset.level];
 
     const { rows, mode } = await fetchLotsDetail(filters);
@@ -2174,6 +2177,24 @@ async function fetchSuiteCompareTrend(filters) {
   }
 }
 
+// Verified Zone Trend — backed by monthly_snapshots_detail (point-in-time inventory snapshots,
+// see scripts/excel_to_sqlite.py), reliable regardless of "Sales Date" data quality. Only ever
+// called for a single, unambiguous Branch+Product Type+Zone(+Lot Type) combination — see its
+// call site in renderSuiteCompare for the guard that skips it otherwise.
+async function fetchZoneTrendData({ branch, productType, zone, lotType }) {
+  try {
+    const qs = new URLSearchParams({ branch, productType, zone });
+    if (lotType) qs.append('lotType', lotType);
+    const res = await fetch(`/api/snapshots/zone-trend?${qs.toString()}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.rows || [];
+  } catch (e) {
+    console.error('[dashboard] fetchZoneTrendData failed:', e);
+    return [];
+  }
+}
+
 function suiteComparePanelLabel(branch, zone, materialType, unitLabel, unitKind) {
   const branchLabel = joinOrAll(branch, 'All');
   if (unitKind === 'suiteNo') {
@@ -2235,11 +2256,31 @@ async function renderSuiteCompare() {
       panelTitle = suiteComparePanelLabel(branch, zone, materialType, unit, unitKind);
     }
 
+    // Verified Zone Trend only makes sense when this panel represents exactly one real Zone
+    // value (the 'zone' fallback, or the 'suiteNo' kind's 'zoneSnapshot' aggregate view — i.e.
+    // !suiteCompareIsBySuite()) under an unambiguous single Branch + Product Type selection —
+    // monthly_snapshots_detail is keyed to one exact combination, not a multi-select union. Lot
+    // Type is only ever attached for flat-land product types (the only ones the snapshot capture
+    // grouped by Lot Type too — see scripts/excel_to_sqlite.py's FLAT_TYPES) and only when the
+    // user has narrowed to exactly one Lot Type; otherwise it stays unset to match the zone-level
+    // (lot_type IS NULL) row.
+    let zoneTrend = null;
+    if (!suiteCompareIsBySuite() && branch.length === 1 && materialType.length === 1) {
+      const singleLotType = modeForSelection(materialType) === 'flat' && lotType.length === 1 ? lotType[0] : null;
+      zoneTrend = await fetchZoneTrendData({
+        branch: branch[0],
+        productType: materialType[0],
+        zone: unit,
+        lotType: singleLotType,
+      });
+    }
+
     return {
       unit,
       panelTitle,
       snapshot: aggregateSnapshotByLotType(snapshotRows),
       trendSeries,
+      zoneTrend,
     };
   }));
 
@@ -2271,8 +2312,40 @@ function buildTrendRowsForUnit(trendSeries, months) {
   return { byLotType, totals };
 }
 
+// Verified Zone Trend table body — mirrors renderMonthlyTrendTable's row shape/MoM styling
+// (renderTrendCell) exactly, just scoped to one Branch+Product Type+Zone(+Lot Type) combination
+// instead of the whole dataset. rows === null means the combination was ambiguous (see
+// renderSuiteCompare's guard) and the section is skipped entirely; an empty/1-row array means the
+// combination is valid but doesn't have 2+ months of snapshots yet.
+function renderZoneTrendSection(rows) {
+  if (rows === null) return '';
+
+  const body = rows.length < 2
+    ? `<div style="padding:0.6rem 0;color:var(--muted);font-size:0.82rem">Verified trend data is being collected
+        starting this month. Check back after your next monthly upload to see the first month-over-month
+        comparison.</div>`
+    : `<div class="table-scroll"><table>
+        <thead><tr><th>Month</th><th>Stock</th><th>Sold</th><th>Balance</th><th>Sell-Through %</th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr>
+            <td>${formatTrendMonth(r.yearMonth)}</td>
+            ${renderTrendCell(fmt(r.totalStock), r.momPct.totalStock)}
+            ${renderTrendCell(fmt(r.totalSold), r.momPct.totalSold)}
+            ${renderTrendCell(fmt(r.totalBalance), r.momPct.totalBalance)}
+            ${renderTrendCell(pct(r.sellThroughPct), r.momPct.sellThroughPct)}
+          </tr>`).join('')}
+        </tbody>
+      </table></div>`;
+
+  return `
+    <div class="suite-compare-subtitle">Verified Zone Trend (Month-over-Month Inventory Snapshots)</div>
+    ${body}
+    <p class="lot-filter-help" style="margin-top:0.35rem;">This trend is based on actual point-in-time inventory
+      snapshots captured at each monthly upload — reliable regardless of Sales Date data quality.</p>`;
+}
+
 function renderSuiteComparePanel(unitData, months) {
-  const { panelTitle, snapshot, trendSeries } = unitData;
+  const { panelTitle, snapshot, trendSeries, zoneTrend } = unitData;
 
   const stockTotal = snapshot.reduce((s, r) => s + r.totalStock, 0);
   const soldTotal = snapshot.reduce((s, r) => s + r.totalSold, 0);
@@ -2316,6 +2389,7 @@ function renderSuiteComparePanel(unitData, months) {
       ${snapshotHtml}
       <div class="suite-compare-subtitle">Monthly Sales Trend (Units)</div>
       ${trendHtml}
+      ${renderZoneTrendSection(zoneTrend)}
     </div>`;
 }
 

@@ -185,6 +185,62 @@ function isSuiteGrouped(productType) {
   return SUITE_GROUPED_TYPES.includes(productType);
 }
 
+// ── Migration-artifact date detection ──
+// A "Lot Create On" date shared by an outsized fraction of a branch's total lot count almost
+// certainly reflects a one-time system-migration batch load (every pre-existing lot stamped with
+// the migration run's date), not real launch activity on that day — confirmed against KL Burial
+// Plot, where 20181117/20181118 alone account for ~87% of all rows, and the zones anchored
+// entirely to those two dates are already ~98% sold (vs ~86% for genuinely-dated zones), i.e.
+// pre-existing legacy inventory carried into the system, not a real November 2018 launch. 15% is
+// comfortably below KL's ~18-58% per-date share while still well above what a real (even large)
+// single-day launch batch would plausibly hit for a whole branch's cumulative lot count across
+// its full history.
+const MIGRATION_DATE_THRESHOLD_PCT = 15;
+
+// Keyed by normalized branch — expensive to scan a branch's full lot history, and this data only
+// ever changes on a monthly reload, so it's computed once per branch and kept for the life of the
+// process. clearMigrationDateCache() (called from server.js's /api/refresh) is the only way to
+// force a recompute short of a restart.
+const migrationDateCache = new Map();
+
+export function clearMigrationDateCache() {
+  migrationDateCache.clear();
+}
+
+// Returns the Set of "Lot Create On" values (as their raw CAST...AS TEXT form, e.g. "20181117")
+// flagged as migration artifacts for this branch — every lot on a flagged date, regardless of
+// product type or zone, is a candidate; buildCohortsFromSql below decides per-cohort whether
+// enough of a specific cohort's own lots actually fall on one to flag the cohort itself.
+export function detectMigrationDates(branch) {
+  const key = String(branch || '').trim().toUpperCase();
+  if (!key) return new Set();
+  if (migrationDateCache.has(key)) return migrationDateCache.get(key);
+
+  const rows = getDb().prepare(`
+    SELECT CAST("Lot Create On" AS TEXT) AS lotCreateOn, COUNT(*) AS n
+    FROM master_stock
+    WHERE UPPER(TRIM("Branch")) = ?
+    GROUP BY "Lot Create On"
+  `).all(key);
+
+  const total = rows.reduce((sum, r) => sum + r.n, 0);
+  const flagged = new Set();
+  if (total > 0) {
+    for (const r of rows) {
+      if (!r.lotCreateOn) continue;
+      if ((r.n / total) * 100 > MIGRATION_DATE_THRESHOLD_PCT) flagged.add(r.lotCreateOn);
+    }
+  }
+  migrationDateCache.set(key, flagged);
+  return flagged;
+}
+
+// "20181117" -> "2018-11-17", for display.
+function formatLotCreateOn(raw) {
+  if (!raw || raw.length !== 8) return raw;
+  return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+}
+
 // ── Cohort grouping (shared by /curve and /cohort-table) ──
 // "Lot Create On"/"Sales Date" are stored as integer YYYYMMDD — these expressions derive a
 // month-index (year*12+month) and CohortPeriod ("YYYY-Qn") directly in SQL, the same values
@@ -298,6 +354,21 @@ function buildCohortsFromSql(filters) {
     GROUP BY ${COHORT_GROUP_BY}, monthsSinceLaunch
   `).all(...params);
 
+  // Per-cohort breakdown by raw "Lot Create On" date — lets each cohort be checked against its
+  // OWN branch's flagged migration dates (detectMigrationDates), since a peer/cross-branch query
+  // here can span multiple branches each with their own distinct migration dates. "Total Stock
+  // Case" is always 1 per master_stock row (verified against the live data), so summing it here
+  // is equivalent to counting lots, matching detectMigrationDates' own COUNT(*)-based threshold.
+  const lotDateRows = getDb().prepare(`
+    SELECT
+      ${COHORT_GROUP_SELECT},
+      CAST("Lot Create On" AS TEXT) AS lotCreateOn,
+      SUM("Total Stock Case") AS units
+    FROM master_stock
+    ${where}
+    GROUP BY ${COHORT_GROUP_BY}, lotCreateOn
+  `).all(...params);
+
   const cohortKey = (r) => `${r.branch}|${r.productType}|${r.zone}|${r.suiteNo}|${r.cohortPeriod}`;
 
   const cohorts = new Map();
@@ -311,6 +382,7 @@ function buildCohortsFromSql(filters) {
         priceSum: 0, priceCount: 0,
         eyeLevelCounts: new Map(),
         soldByMonth: new Map(),
+        migrationDateUnits: new Map(),
       });
     }
     const c = cohorts.get(key);
@@ -327,17 +399,35 @@ function buildCohortsFromSql(filters) {
     if (!c) continue;
     c.soldByMonth.set(r.monthsSinceLaunch, (c.soldByMonth.get(r.monthsSinceLaunch) || 0) + (r.sold || 0));
   }
+  for (const r of lotDateRows) {
+    const c = cohorts.get(cohortKey(r));
+    if (!c || !r.lotCreateOn) continue;
+    const flaggedDates = detectMigrationDates(r.branch);
+    if (flaggedDates.has(r.lotCreateOn)) {
+      c.migrationDateUnits.set(r.lotCreateOn, (c.migrationDateUnits.get(r.lotCreateOn) || 0) + (r.units || 0));
+    }
+  }
+
+  // A cohort is a migration artifact when a high percentage (>90%) of its own units sit on ONE
+  // of its branch's flagged dates — not "any flagged units at all", so a genuine multi-year zone
+  // that happens to include a handful of migrated legacy lots isn't misclassified.
+  const MIGRATION_ARTIFACT_THRESHOLD = 0.9;
 
   const nowMI = nowMonthIndex();
   const list = [];
   for (const c of cohorts.values()) {
     const ageMonthsNow = Math.max(0, nowMI - cohortPeriodStartMonthIndex(c.cohortPeriod));
+    const totalMigrationUnits = Array.from(c.migrationDateUnits.values()).reduce((a, b) => a + b, 0);
+    const isMigrationArtifact = c.totalUnits > 0 && (totalMigrationUnits / c.totalUnits) > MIGRATION_ARTIFACT_THRESHOLD;
+    const migrationDate = isMigrationArtifact ? dominantFromCounts(c.migrationDateUnits) : null;
     list.push({
       ...c,
       ageMonthsNow,
       avgPrice: c.priceCount > 0 ? c.priceSum / c.priceCount : 0,
       overallSellThroughPct: c.totalUnits > 0 ? (c.soldUnits / c.totalUnits) * 100 : 0,
       eyeLevel: dominantFromCounts(c.eyeLevelCounts),
+      isMigrationArtifact,
+      migrationDate: migrationDate ? formatLotCreateOn(migrationDate) : null,
       cohortLabel: `${c.branch} - ${stripNVPrefix(c.productType)} - Zone ${c.zone}`
         + (c.suiteNo !== null ? ` - Suite ${c.suiteNo}` : isSuiteGrouped(c.productType) ? ' - No Suite Data' : '')
         + ` - ${c.cohortPeriod}`,
@@ -415,12 +505,20 @@ function cumulativePctAt(cohort, m) {
 
 export function getLifecycleCurve(filters = {}) {
   const maxCohorts = Number(filters.maxCohorts) > 0 ? Number(filters.maxCohorts) : 8;
+  const includeLegacy = filters.includeLegacy === true;
   const cohorts = buildCohortsFromSql(filters);
 
   // Largest cohorts by unit count first, so the chart doesn't get overcrowded.
   cohorts.sort((a, b) => b.totalUnits - a.totalUnits);
 
-  const result = cohorts.slice(0, maxCohorts).map(c => {
+  // Migration-artifact cohorts are excluded from the "top cohorts by size" selection entirely by
+  // default (their misleadingly-flat curves would otherwise crowd out genuine ones — KL Burial
+  // Plot's migrated zones are already ~98% sold, so they dominate any size-based ranking) —
+  // includeLegacy: true opts back in, at which point they're still returned (with
+  // isMigrationArtifact/migrationDate) so the frontend can render them dashed/muted instead.
+  const eligible = includeLegacy ? cohorts : cohorts.filter(c => !c.isMigrationArtifact);
+
+  const result = eligible.slice(0, maxCohorts).map(c => {
     const maxMonth = Math.min(36, c.ageMonthsNow);
     const points = [];
     let cumulative = 0;
@@ -435,6 +533,7 @@ export function getLifecycleCurve(filters = {}) {
       cohortLabel: c.cohortLabel, branch: c.branch, productType: c.productType, zone: c.zone,
       suiteNo: c.suiteNo, cohortPeriod: c.cohortPeriod, totalUnits: c.totalUnits,
       ageMonthsNow: c.ageMonthsNow, points,
+      isMigrationArtifact: c.isMigrationArtifact, migrationDate: c.migrationDate,
     };
   });
 
@@ -463,7 +562,7 @@ function cohortStatusFlag(cohort, ageMonths) {
   return 'Steady';
 }
 
-const STATUS_FLAGS = ['New', 'Steady', 'Slowing', 'Stagnant', 'Sold Out'];
+const STATUS_FLAGS = ['New', 'Steady', 'Slowing', 'Stagnant', 'Sold Out', 'Legacy'];
 const PEER_COMPARISONS = ['Above Peers', 'On Par', 'Below Peers', 'Insufficient Data'];
 
 // "Price Range" tiers are calibrated per product type, not one universal price scale (e.g.
@@ -602,9 +701,16 @@ export function getLifecycleCohortTable(filters = {}) {
   // a second SQL aggregation, since peerUniverse is always a superset of it.
   const peerUniverse = buildCohortsFromSql({ productType, bigLotFilter });
   const branchList = normalizedFilterList(branch);
-  const cohorts = branchList.length
+  const branchScoped = branchList.length
     ? peerUniverse.filter(c => matchesNormalizedList(c.branch, branchList))
     : peerUniverse;
+  // "Exclude Legacy/Migration-Artifact Cohorts" — default ON, consistent with the Lifecycle
+  // Curve's own default-excluded behavior. Filtered here (before allRows/the summary cards are
+  // built) so a legacy cohort simply isn't part of the result set at all while excluded, matching
+  // "excluded from trend analysis by default" — turning the filter off surfaces them again, each
+  // carrying isMigrationArtifact/migrationDate so the frontend can render the Legacy badge.
+  const excludeLegacy = filters.excludeLegacy !== false;
+  const cohorts = excludeLegacy ? branchScoped.filter(c => !c.isMigrationArtifact) : branchScoped;
   const priceRangeBands = getPriceRangeBandsByProductType();
   const peerGroups = buildPeerGroups(peerUniverse, preset, priceRangeBands);
 
@@ -626,7 +732,12 @@ export function getLifecycleCohortTable(filters = {}) {
       balanceValue: c.balanceValue,
       avgPrice: c.avgPrice,
       overallSellThroughPct: c.overallSellThroughPct,
-      statusFlag: cohortStatusFlag(c, ageMonths),
+      // Migration-artifact cohorts are never eligible for New/Steady/Slowing/Stagnant — their
+      // "launch" date is known-unreliable, so classifying their trajectory would be meaningless;
+      // 'Legacy' replaces the computed flag outright rather than sitting alongside it.
+      statusFlag: c.isMigrationArtifact ? 'Legacy' : cohortStatusFlag(c, ageMonths),
+      isMigrationArtifact: c.isMigrationArtifact,
+      migrationDate: c.migrationDate,
       peerBenchmarkPct,
       peerComparison,
     };
