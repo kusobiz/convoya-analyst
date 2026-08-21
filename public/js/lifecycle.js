@@ -24,11 +24,20 @@ let lifecycleNewZonesPageSize = 25;
 const cohortFiltersUI = {};
 let lifecycleCohortFiltersReady = null;
 let lastLifecycleStatusFlagSummary = [];
-const LIFECYCLE_STATUS_FLAGS = ['New', 'Steady', 'Slowing', 'Stagnant', 'Sold Out'];
+// 'Legacy' overrides New/Steady/Slowing/Stagnant for migration-artifact cohorts (see
+// routes/lifecycle.js's detectMigrationDates) — their "launch" date is known-unreliable, so a
+// trajectory classification would be meaningless. It's never eligible for Sold Out either; the
+// backend always assigns exactly one of these six.
+const LIFECYCLE_STATUS_FLAGS = ['New', 'Steady', 'Slowing', 'Stagnant', 'Sold Out', 'Legacy'];
 const LIFECYCLE_STATUS_FLAG_CARD_CLASS = {
   New: 'status-flag-card--blue', Steady: 'status-flag-card--green', Slowing: 'status-flag-card--amber',
-  Stagnant: 'status-flag-card--red', 'Sold Out': 'status-flag-card--grey',
+  Stagnant: 'status-flag-card--red', 'Sold Out': 'status-flag-card--grey', Legacy: 'status-flag-card--grey',
 };
+
+// Cohort Table's "Exclude Legacy/Migration-Artifact Cohorts" filter — default ON. Lifecycle
+// Curve's own default-OFF "Include Legacy..." toggle is separate state (lifecycleIncludeLegacy,
+// see Section 2 below) since the two sections have independent filter rows.
+let cohortExcludeLegacy = true;
 
 // Peer Benchmark (item 3): a second, independent summary/filter dimension alongside Status
 // Flag — same card-summary/filter/badge machinery, just its own state and color mapping.
@@ -368,10 +377,15 @@ function exportLifecycleNewZonesExcel() {
 }
 
 // ── Section 2: Lifecycle Curve ──
+// Default OFF — matches the Cohort Table's default-ON "Exclude Legacy..." filter (see
+// cohortExcludeLegacy), so both sections hide migration-artifact cohorts (routes/lifecycle.js's
+// detectMigrationDates) out of the box.
+let lifecycleIncludeLegacy = false;
+
 async function renderLifecycleCurveChart(filters) {
   const emptyEl = document.getElementById('lifecycleCurveEmpty');
   try {
-    const { cohorts } = await fetchLifecycleJSON('curve', filters);
+    const { cohorts } = await fetchLifecycleJSON('curve', { ...filters, includeLegacy: lifecycleIncludeLegacy });
     destroyChart('lifecycleCurve');
     const ctx = document.getElementById('chartLifecycleCurve');
     if (!ctx) return;
@@ -382,11 +396,17 @@ async function renderLifecycleCurveChart(filters) {
     }
     if (emptyEl) emptyEl.style.display = 'none';
 
+    // Migration-artifact cohorts (only present at all when the toggle above is on — the backend
+    // excludes them from the top-cohorts selection otherwise) render dashed and in a single muted
+    // grey rather than the normal per-cohort palette color, with the legend label suffixed so
+    // they read as "not a real launch curve" at a glance rather than looking like a genuine flat
+    // performer.
     const datasets = cohorts.map((c, i) => ({
-      label: c.cohortLabel,
+      label: c.cohortLabel + (c.isMigrationArtifact ? ' (Legacy — launch date unreliable)' : ''),
       data: c.points.map(p => ({ x: p.monthsSinceLaunch, y: p.cumulativeSellThroughPct })),
-      borderColor: veloColor(i),
-      backgroundColor: veloColor(i),
+      borderColor: c.isMigrationArtifact ? C.muted : veloColor(i),
+      backgroundColor: c.isMigrationArtifact ? C.muted : veloColor(i),
+      borderDash: c.isMigrationArtifact ? [6, 4] : [],
       borderWidth: 2,
       pointRadius: 2,
       tension: 0.15,
@@ -433,14 +453,24 @@ const LIFECYCLE_COHORT_COLUMNS = [
   { key: 'balanceValue',          label: 'Balance Value',   type: 'number', render: r => myr(r.balanceValue) },
   { key: 'avgPrice',              label: 'Avg Price',       type: 'number', render: r => myr(r.avgPrice) },
   { key: 'overallSellThroughPct', label: 'Sell-Through %',  type: 'number', render: r => pct(r.overallSellThroughPct) },
-  { key: 'statusFlag',            label: 'Status Flag',     type: 'text',   render: r => `<span class="badge ${lifecycleStatusBadgeClass(r.statusFlag)}">${r.statusFlag}</span>` },
+  { key: 'statusFlag',            label: 'Status Flag',     type: 'text',   render: r => renderLifecycleStatusBadgeHTML(r) },
   { key: 'peerComparison',        label: 'Peer Benchmark',  type: 'text',   render: r => renderPeerComparisonBadgeHTML(r) },
 ];
+
+// Migration-artifact cohorts (statusFlag === 'Legacy') carry a title tooltip naming the exact
+// "Lot Create On" date that triggered the flag (see routes/lifecycle.js's detectMigrationDates),
+// so the badge is self-explanatory without a separate column.
+function renderLifecycleStatusBadgeHTML(r) {
+  const title = r.isMigrationArtifact && r.migrationDate
+    ? ` title="Migration artifact — Lot Create On anchored to ${escapeHtml(r.migrationDate)}"`
+    : '';
+  return `<span class="badge ${lifecycleStatusBadgeClass(r.statusFlag)}"${title}>${r.statusFlag}</span>`;
+}
 
 function lifecycleStatusBadgeClass(flag) {
   return {
     New: 'badge--blue', Steady: 'badge--green', Slowing: 'badge--amber',
-    Stagnant: 'badge--red', 'Sold Out': 'badge--grey',
+    Stagnant: 'badge--red', 'Sold Out': 'badge--grey', Legacy: 'badge--grey',
   }[flag] || 'badge--navy';
 }
 
@@ -684,6 +714,7 @@ async function renderLifecycleCohortSection() {
     peerComparison: cohortFiltersUI.peerComparison.getValues(),
     ageMonths: lifecycleAgeMonths,
     peerPreset: lifecyclePeerPreset,
+    excludeLegacy: cohortExcludeLegacy,
   };
   const tbody = document.getElementById('lifecycleCohortsBody');
   if (tbody) tbody.innerHTML = `<tr><td style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
@@ -1122,9 +1153,27 @@ function refreshLifecycleForBigLotFilter() {
   if (lifecycleLoaded) renderProductLifecycle();
 }
 
+// Legacy/migration-artifact toggles — one per section (Lifecycle Curve's "Include...", Cohort
+// Table's "Exclude..."), each only re-rendering its own section, same pattern as the age/view
+// toggles elsewhere in this file.
+function initLifecycleLegacyControls() {
+  const curveToggle = document.getElementById('lifecycleIncludeLegacyToggle');
+  curveToggle?.addEventListener('change', () => {
+    lifecycleIncludeLegacy = curveToggle.checked;
+    renderLifecycleCurveChart(getLifecycleFilterValues());
+  });
+
+  const cohortToggle = document.getElementById('cohortExcludeLegacyToggle');
+  cohortToggle?.addEventListener('change', () => {
+    cohortExcludeLegacy = cohortToggle.checked;
+    renderLifecycleCohortSection();
+  });
+}
+
 initLifecycleFilters();
 initLifecycleCohortFilters();
 initLifecyclePeerPresetControls();
+initLifecycleLegacyControls();
 initLifecycleTabEvents();
 
 window.renderProductLifecycle = renderProductLifecycle;

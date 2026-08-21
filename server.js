@@ -20,9 +20,10 @@ import reportRouter from './routes/report.js';
 import lotsRouter from './routes/lots.js';
 import pricingRouter from './routes/pricing.js';
 import velocityRouter from './routes/velocity.js';
-import lifecycleRouter from './routes/lifecycle.js';
+import lifecycleRouter, { clearMigrationDateCache } from './routes/lifecycle.js';
 import attributesRouter from './routes/attributes.js';
 import overviewRouter from './routes/overview.js';
+import snapshotsRouter from './routes/snapshots.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -75,6 +76,7 @@ app.get('/api/data', (req, res) => {
 app.get('/api/refresh', (req, res) => {
   try {
     const data = refreshCache();
+    clearMigrationDateCache();
     res.json({ success: true, rows: data.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -89,6 +91,7 @@ app.use('/api/velocity', velocityRouter);
 app.use('/api/lifecycle', lifecycleRouter);
 app.use('/api/attributes', attributesRouter);
 app.use('/api/overview', overviewRouter);
+app.use('/api/snapshots', snapshotsRouter);
 
 app.listen(PORT, () => {
   console.log(`analyst running on http://localhost:${PORT}`);

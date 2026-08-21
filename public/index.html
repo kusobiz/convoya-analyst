@@ -650,6 +650,13 @@
 
     <!-- ── TAB: Sales Velocity ── -->
     <section class="tab-panel" id="tab-velocity">
+      <div class="beta-info-banner">
+        <span class="beta-info-banner-icon">&#9888;&#65039;</span>
+        <span><strong>Data Reliability Notice:</strong> This trend is derived from the "Sales Date" field, which can
+          update on ownership transfers, profile updates, and cancellations — not exclusively on sales — at any
+          time. Treat as indicative only. See Lot Drill-Down's Zone Snapshot for verified month-over-month figures
+          based on actual inventory snapshots.</span>
+      </div>
       <div class="table-card">
         <h3 class="table-title">Filters</h3>
         <div class="lot-filter-row">
@@ -816,6 +823,13 @@
 
     <!-- ── TAB: Product Lifecycle ── -->
     <section class="tab-panel" id="tab-lifecycle">
+      <div class="beta-info-banner">
+        <span class="beta-info-banner-icon">&#9888;&#65039;</span>
+        <span><strong>Data Reliability Notice:</strong> This trend is derived from the "Sales Date" field, which can
+          update on ownership transfers, profile updates, and cancellations — not exclusively on sales — at any
+          time. Treat as indicative only. See Lot Drill-Down's Zone Snapshot for verified month-over-month figures
+          based on actual inventory snapshots.</span>
+      </div>
       <div class="table-card">
         <h3 class="table-title">Filters</h3>
         <div class="lot-filter-row">
@@ -907,6 +921,15 @@
       <!-- Section 2: Lifecycle Curve -->
       <div class="chart-card chart-card--wide">
         <h3 class="chart-title">Lifecycle Curve — Cumulative Sell-Through % by Months Since Launch</h3>
+        <div class="matrix-toggle-row">
+          <label class="matrix-toggle">
+            <input type="checkbox" id="lifecycleIncludeLegacyToggle">
+            Include Legacy/Migration-Artifact Cohorts
+          </label>
+        </div>
+        <p class="lot-filter-help">Some zones share an identical "created" date due to a historical data migration,
+          not a genuine launch — these are flagged as Legacy and excluded from trend analysis by default, since
+          their apparent "age" doesn't reflect real launch timing.</p>
         <div class="chart-wrap chart-wrap--velocity">
           <canvas id="chartLifecycleCurve"></canvas>
         </div>
@@ -942,11 +965,27 @@
             <select class="branch-select" id="cohortPeerPreset"></select>
           </div>
         </div>
+        <div class="matrix-toggle-row">
+          <label class="matrix-toggle">
+            <input type="checkbox" id="cohortExcludeLegacyToggle" checked>
+            Exclude Legacy/Migration-Artifact Cohorts
+          </label>
+        </div>
+        <p class="lot-filter-help">Some zones share an identical "created" date due to a historical data migration,
+          not a genuine launch — these are flagged as Legacy and excluded from trend analysis by default, since
+          their apparent "age" doesn't reflect real launch timing.</p>
         <p class="lot-filter-help">Branch, Product Type, Status Flag and Peer Benchmark here are independent
           filters scoped to the Cohort Table and its summary cards below — separate from the Branch/Product Type
           filters above, which drive the rest of this tab. New / Aging Threshold above still applies (it decides
           what "New" means for Status Flag). Peer Benchmark Preset is shared with Newly Launched Zones &amp; Suites
           above.</p>
+
+        <div class="beta-info-banner">
+          <span class="beta-info-banner-icon">&#9888;&#65039;</span>
+          <span><strong>Status Flag and Peer Benchmark are calculated from Sales Date data</strong>, which may not
+            reliably reflect actual sale timing for all zones. Use as a directional signal only, not a definitive
+            classification, particularly for older or legacy zones.</span>
+        </div>
 
         <div class="status-flag-summary" id="lifecycleStatusFlagCards"></div>
         <div class="status-flag-summary" id="lifecyclePeerComparisonCards" style="margin-top:0.4rem;"></div>
