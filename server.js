@@ -3,6 +3,7 @@ import express from 'express';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { sessionMiddleware, requireAuth, loginHandler, logoutHandler } from './src/auth.js';
+import adminRouter from './routes/admin.js';
 import {
   refreshCache,
   getOverview,
@@ -51,6 +52,16 @@ app.get('/', (req, res) => {
   res.sendFile(join(__dirname, 'public/index.html'));
 });
 
+// Lets the frontend know who's logged in and whether to show the Admin-only User Management
+// tab — role lives in the session (set at login), not re-queried from the DB per request.
+app.get('/api/me', (req, res) => {
+  res.json({
+    username: req.session.username,
+    displayName: req.session.displayName,
+    role: req.session.role,
+  });
+});
+
 // Batch dashboard data
 app.get('/api/data', (req, res) => {
   try {
@@ -92,6 +103,7 @@ app.use('/api/lifecycle', lifecycleRouter);
 app.use('/api/attributes', attributesRouter);
 app.use('/api/overview', overviewRouter);
 app.use('/api/snapshots', snapshotsRouter);
+app.use('/api/admin', adminRouter);
 
 app.listen(PORT, () => {
   console.log(`analyst running on http://localhost:${PORT}`);

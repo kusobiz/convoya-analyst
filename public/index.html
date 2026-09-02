@@ -41,6 +41,7 @@
           </select>
         </div>
         <span class="biglot-badge" id="bigLotBadge" hidden></span>
+        <span class="ytd-badge" id="currentUserBadge" hidden></span>
         <button class="btn-logout" onclick="logout()">Logout</button>
       </div>
     </div>
@@ -58,6 +59,7 @@
     <button class="tab" data-tab="velocity">Sales Velocity</button>
     <button class="tab" data-tab="lifecycle">Product Lifecycle</button>
     <button class="tab" data-tab="attributes">Product Attributes</button>
+    <button class="tab tab--admin" data-tab="admin" id="tabBtnAdmin" style="display:none;">User Management</button>
   </div>
 
   <main class="main-content">
@@ -1434,6 +1436,90 @@
 
     </section>
 
+    <!-- ── TAB: User Management (Admin only) ── -->
+    <section class="tab-panel" id="tab-admin">
+      <div class="beta-info-banner">
+        <span class="beta-info-banner-icon">&#128274;</span>
+        <span>Admin-only. Accounts created here can sign in immediately with the temporary password
+          you set — there is no separate invite/verification step yet.</span>
+      </div>
+
+      <div class="table-card">
+        <h3 class="table-title">Users</h3>
+        <div class="lot-filter-row">
+          <button class="btn-report" id="btnAdminUsersRefresh" onclick="renderAdminUsersSection()">
+            <span>&#128269;</span> Refresh
+          </button>
+          <button class="btn-report" id="btnAdminUserAdd" onclick="openAdminUserModal()">
+            <span>&#10133;</span> Add User
+          </button>
+        </div>
+        <div class="table-scroll">
+          <table id="tableAdminUsers" class="sticky-actions">
+            <thead>
+              <tr>
+                <th>Username</th><th>Display Name</th><th>Role</th><th>Status</th>
+                <th>Created</th><th>Last Login</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="adminUsersBody">
+              <tr><td colspan="7" style="text-align:center;color:var(--muted)">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Add User modal -->
+      <div class="velo-modal-overlay" id="adminUserModal" hidden>
+        <div class="velo-modal-box">
+          <h3 class="table-title">Add User</h3>
+          <div id="adminUserWarning" class="lot-filter-help" style="display:none;border-top:none;padding-top:0;color:var(--red);"></div>
+          <div class="lot-filter-row">
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="adminUserUsername">Username *</label>
+              <input class="branch-select" id="adminUserUsername" placeholder="e.g. jsmith" autocapitalize="off" autocorrect="off">
+            </div>
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="adminUserDisplayName">Display Name</label>
+              <input class="branch-select" id="adminUserDisplayName" placeholder="e.g. John Smith">
+            </div>
+          </div>
+          <div class="lot-filter-row">
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="adminUserPassword">Temporary Password *</label>
+              <input class="branch-select" id="adminUserPassword" type="text" placeholder="min. 8 characters" autocapitalize="off" autocorrect="off">
+            </div>
+            <div class="lot-filter-field">
+              <label class="lot-filter-label" for="adminUserRole">Role *</label>
+              <select class="branch-select" id="adminUserRole">
+                <option value="Manager">Manager</option>
+                <option value="Admin">Admin</option>
+              </select>
+            </div>
+          </div>
+          <div class="velo-modal-actions">
+            <button type="button" class="btn-report" id="btnAdminUserCancel">Cancel</button>
+            <button type="button" class="btn-report" id="btnAdminUserSave">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <h3 class="table-title">Login Activity</h3>
+        <div class="drilldown-toolbar" id="adminAuditToolbar"></div>
+        <div class="table-scroll">
+          <table id="tableAdminAudit">
+            <thead>
+              <tr><th>Username</th><th>Result</th><th>IP Address</th><th>Attempted At</th></tr>
+            </thead>
+            <tbody id="adminAuditBody">
+              <tr><td colspan="4" style="text-align:center;color:var(--muted)">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <script src="/js/common.js"></script>
@@ -1442,6 +1528,7 @@
   <script src="/js/velocity.js"></script>
   <script src="/js/lifecycle.js"></script>
   <script src="/js/attributes.js"></script>
+  <script src="/js/admin.js"></script>
 
   <script>
     // Tab switching
@@ -1455,6 +1542,7 @@
         if (btn.dataset.tab === 'velocity' && typeof onVelocityTabActivated === 'function') onVelocityTabActivated();
         if (btn.dataset.tab === 'lifecycle' && typeof onLifecycleTabActivated === 'function') onLifecycleTabActivated();
         if (btn.dataset.tab === 'attributes' && typeof onAttributesTabActivated === 'function') onAttributesTabActivated();
+        if (btn.dataset.tab === 'admin' && typeof onAdminTabActivated === 'function') onAdminTabActivated();
       });
     });
 

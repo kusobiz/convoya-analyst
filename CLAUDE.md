@@ -16,7 +16,13 @@ Node.js ESM (type: module in package.json) · Express · xlsx · pptxgenjs · Ch
   NV EBL, NV Urn Burial Plot, NV Baby Paradise, NV Pet Burial Plot
 
 ## Auth
-- Session-based, shared password via .env MANAGER_PASSWORD
+- Session-based, multi-user — accounts live in the `users` table (data/stock.db), managed via
+  src/auth.js. Roles: 'Admin' | 'Manager'. Admin-only routes (routes/admin.js) use
+  requireAdmin(); all other routes use requireAuth(). Login attempts are recorded in
+  `login_audit`, viewable in the Admin-only User Management tab.
+- First accounts are created via `node scripts/seed_users.js` (idempotent — no-ops once the
+  users table has any rows). New accounts after that are created from the User Management tab.
+- .env MANAGER_PASSWORD is legacy and no longer read by the login flow — do not reintroduce it.
 - All routes require session except /login and /api/login
 
 ## Claude API

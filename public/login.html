@@ -100,6 +100,7 @@
       margin-bottom: 0.4rem;
     }
 
+input[type="text"],
     input[type="password"] {
       width: 100%;
       padding: 0.7rem 1rem;
@@ -111,13 +112,15 @@
       transition: border-color 0.2s;
       background: #F5F6F8;
     }
+    input[type="text"]:focus,
     input[type="password"]:focus {
       border-color: #1A2C5B;
       background: #fff;
     }
+    .field { margin-bottom: 1.1rem; }
 
     button[type="submit"] {
-      margin-top: 1.25rem;
+      margin-top: 0.25rem;
       width: 100%;
       padding: 0.75rem;
       background: #1A2C5B;
@@ -167,8 +170,8 @@
   </div>
 
   <div class="card">
-    <h2>Manager Access</h2>
-    <p class="subtitle">Enter your shared access password to continue.</p>
+    <h2>Sign In</h2>
+    <p class="subtitle">Enter your username and password to continue.</p>
 
     <div class="gold-rule"></div>
 
@@ -177,12 +180,18 @@
     </div>
 
     <div class="error-box" id="errorBox">
-      Incorrect password. Please try again.
+      Invalid username or password. Please try again.
     </div>
 
     <form method="POST" action="/api/login">
-      <label for="password">Password</label>
-      <input type="password" id="password" name="password" placeholder="Enter password" autofocus required />
+      <div class="field">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" placeholder="Enter username" autofocus required autocapitalize="off" autocorrect="off" />
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" placeholder="Enter password" required />
+      </div>
       <button type="submit">Sign In</button>
     </form>
   </div>
