@@ -34,8 +34,13 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(sessionMiddleware());
 
-// Static assets served without auth (login page needs CSS/JS too)
-app.use(express.static(join(__dirname, 'public')));
+// index.html is the authenticated app shell, not a public static asset — it must only ever be
+// served through the '/' route below, after requireAuth. `index: false` stops express.static
+// from auto-serving it for '/', and this redirect stops a direct '/index.html' request from
+// doing the same (both would otherwise bypass auth, since express.static runs before requireAuth
+// — the rest of public/ genuinely needs to be auth-free, since the login page needs its CSS/JS).
+app.get('/index.html', (req, res) => res.redirect('/'));
+app.use(express.static(join(__dirname, 'public'), { index: false }));
 
 // Public auth routes
 app.get('/login', (req, res) => {
