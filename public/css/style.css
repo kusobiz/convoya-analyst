@@ -169,10 +169,23 @@ body {
   white-space: nowrap;
 }
 .tab:hover { color: var(--navy); }
+/* Admin-only tab — visually set apart from the regular dashboard tabs with a divider and its
+   own accent color, since it leads to account/security management rather than stock data. */
+.tab--admin {
+  margin-left: 0.5rem;
+  padding-left: 1.75rem;
+  border-left: 1px solid var(--border);
+  color: #a3822f;
+}
+.tab--admin:hover { color: #8a6c26; }
 .tab.active {
   color: var(--navy);
   border-bottom-color: var(--gold);
   font-weight: 700;
+}
+.tab--admin.active {
+  color: #8a6c26;
+  border-bottom-color: #a3822f;
 }
 
 /* ── Main ── */
