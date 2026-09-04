@@ -320,6 +320,10 @@
             <label class="lot-filter-label" for="lotLevel">Level</label>
             <div class="ms" id="lotLevel"></div>
           </div>
+          <div class="lot-filter-field structured-only" id="fieldFloor" style="display:none;">
+            <label class="lot-filter-label" for="lotFloor">Floor</label>
+            <div class="ms" id="lotFloor"></div>
+          </div>
           <div class="lot-filter-field" id="fieldLotType" style="display:none;">
             <label class="lot-filter-label" for="lotType">Lot Type</label>
             <div class="ms" id="lotType"></div>
@@ -357,6 +361,13 @@
             </button>
           </div>
         </div>
+        <p class="lot-filter-summary" id="suiteCompareFilterSummary"></p>
+        <div class="matrix-toggle-row" id="suiteCompareUnitRow" style="display:none;">
+          <div class="lot-filter-field">
+            <label class="lot-filter-label">Compare By</label>
+            <div class="subtab-bar" id="suiteCompareUnitToggle"></div>
+          </div>
+        </div>
         <div class="matrix-toggle-row" id="suiteCompareViewRow" style="display:none;">
           <div class="lot-filter-field">
             <label class="lot-filter-label">View</label>
@@ -384,6 +395,7 @@
 
       <div class="table-card">
         <h3 class="table-title">Lot Results</h3>
+        <p class="lot-filter-summary" id="lotResultsFilterSummary"></p>
         <div class="drilldown-toolbar" id="lotResultsToolbar"></div>
         <div class="table-scroll">
           <table id="tableLots">
@@ -407,6 +419,7 @@
           </div>
         </div>
         <div class="matrix-header" id="matrixHeader"></div>
+        <p class="lot-filter-summary" id="matrixFilterSummary"></p>
         <div class="matrix-toggle-row">
           <label class="matrix-toggle">
             <input type="checkbox" id="matrixShowAmount" checked>

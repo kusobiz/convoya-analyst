@@ -897,7 +897,8 @@ tbody td {
 .velo-period-custom select {
   max-width: 140px;
 }
-.velo-filter-summary {
+.velo-filter-summary,
+.lot-filter-summary {
   margin: 0 0 0.75rem;
   font-size: 0.78rem;
   color: var(--muted);

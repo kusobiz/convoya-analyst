@@ -734,6 +734,20 @@ async function loadLotResultRowLotsContent(btn, content) {
     // whatever Zone the filter panel currently has selected instead of silently omitting it.
     filters.zone = btn.dataset.zone !== undefined ? [btn.dataset.zone] : lotFilters.zone.getValues();
     if (btn.dataset.level !== undefined) filters.level = [btn.dataset.level];
+    // The row itself is only grouped by Zone+Level+Lot Type+Status (see queryLots) — Suite
+    // No/Section/Floor aren't part of that grain, so a row's own total already reflects
+    // whichever of those the main filter panel had narrowed to when the search ran. Carrying
+    // that same selection into this drill-down (same fallback pattern as Branch/Price Range/Zone
+    // above) keeps its lot list matching the row's total instead of silently widening back out
+    // to every Suite No/Section/Floor in the zone.
+    if (lastLotMode === 'structured') {
+      const suiteNo = lotFilters.suiteNo.getValues();
+      const section = lotFilters.section.getValues();
+      const floor = lotFilters.floor.getValues();
+      if (suiteNo.length) filters.suiteNo = suiteNo;
+      if (section.length) filters.section = section;
+      if (floor.length) filters.floor = floor;
+    }
 
     const { rows, mode } = await fetchLotsDetail(filters);
     const totalQty = computeDrillTotalQty(rows);
@@ -870,8 +884,10 @@ async function renderLotDrillDown() {
     body.suiteNo = lotFilters.suiteNo.getValues();
     body.section = lotFilters.section.getValues();
     body.level   = lotFilters.level.getValues();
+    body.floor   = lotFilters.floor.getValues();
   }
 
+  renderLotFilterSummaries();
   renderLotsTableHead(mode);
   const colCount = lotTableColumnCount(mode);
   tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--muted)">Loading…</td></tr>`;
@@ -1634,6 +1650,17 @@ async function fetchLotLevels(branch, zone, suiteNo, section, materialType, pric
   }
 }
 
+async function fetchLotFloors(branch, zone, suiteNo, section, materialType, priceRange) {
+  try {
+    const res = await fetch(`/api/lots/floors?${buildArrayQuery({ branch, zone, suiteNo, section, materialType, priceRange })}`);
+    if (!res.ok) return { floors: [], statuses: [] };
+    return await res.json();
+  } catch (e) {
+    console.error('[dashboard] fetchLotFloors failed:', e);
+    return { floors: [], statuses: [] };
+  }
+}
+
 async function fetchLotTypes(branch, zone, materialType, priceRange, suiteNo) {
   try {
     const res = await fetch(`/api/lots/lotTypes?${buildArrayQuery({ branch, zone, suiteNo, materialType, priceRange })}`);
@@ -1659,6 +1686,15 @@ const lotFilters = {};
 function updateLotTypeFieldVisibility(hasLotTypes) {
   const field = document.getElementById('fieldLotType');
   if (field) field.style.display = hasLotTypes ? '' : 'none';
+}
+
+// Floor is an independent axis from the Suite No -> Section -> Zone hierarchy (most zones have
+// at most one real Floor value, genuinely redundant with the zone — see routes/lots.js's
+// getFloors) — same data-driven show/hide as Suite No/Section/Lot Type: hidden entirely when the
+// current Branch+Zone(+Suite/Section) selection has 0% Floor population, shown otherwise.
+function updateFloorFieldVisibility(hasFloors) {
+  const field = document.getElementById('fieldFloor');
+  if (field) field.style.display = hasFloors ? '' : 'none';
 }
 
 // Zone Summary Matrix's own Lot Type filter — same data-driven values as the main Lot Type
@@ -1692,12 +1728,14 @@ async function refreshLotLocationFields() {
   const previousKind = getSuiteCompareUnitKind();
   const previousSuiteOptions = lotFilters.suiteNo.getOptions();
   const previousSectionOptions = lotFilters.section.getOptions();
+  const previousFloorOptions = lotFilters.floor.getOptions();
 
   const { suites, statuses: suiteStatuses } = await fetchLotSuites(branch, zone, materialType, priceRange);
   lotFilters.suiteNo.setOptions(suites);
 
   let suiteNo = [];
   let sections = [];
+  let floors = [];
   if (mode === 'structured') {
     suiteNo = lotFilters.suiteNo.getValues();
     const sectionsResult = await fetchLotSections(branch, zone, suiteNo, materialType, priceRange);
@@ -1709,21 +1747,34 @@ async function refreshLotLocationFields() {
     const { levels, statuses: levelStatuses } = await fetchLotLevels(branch, zone, suiteNo, section, materialType, priceRange);
     lotFilters.level.setOptions(levels);
 
+    const floorsResult = await fetchLotFloors(branch, zone, suiteNo, section, materialType, priceRange);
+    floors = floorsResult.floors;
+    lotFilters.floor.setOptions(floors);
+    updateFloorFieldVisibility(floors.length > 0);
+
     lotFilters.status.setOptions(levelStatuses.length ? levelStatuses : (sectionStatuses.length ? sectionStatuses : suiteStatuses));
+  } else {
+    lotFilters.floor.setOptions([]);
+    updateFloorFieldVisibility(false);
   }
 
+  // currentKind is resolved against the just-updated option lists but the SAME
+  // suiteCompareUnitChoice as before this refresh — an explicit Compare By pick that's still
+  // valid (still in suiteCompareAvailableKinds()) stays picked; one that no longer qualifies
+  // (e.g. its list dropped below 2 real values) falls back to the auto default here, same as
+  // resetSuiteCompareControls would do explicitly.
   const currentKind = getSuiteCompareUnitKind();
-  const currentUnitOptions = currentKind === 'suiteNo' ? suites : currentKind === 'section' ? sections : [];
   const activeListChanged = currentKind === 'suiteNo' ? !sameOptionList(previousSuiteOptions, suites)
     : currentKind === 'section' ? !sameOptionList(previousSectionOptions, sections)
+    : currentKind === 'floor' ? !sameOptionList(previousFloorOptions, floors)
     : false;
   if (currentKind !== previousKind || activeListChanged) {
-    resetSuiteCompareControls(currentUnitOptions);
+    resetSuiteCompareControls();
   } else {
     // Neither the active unit kind nor its real option list changed, but this may be a Suite
-    // No/Section selection change — re-narrow the scope selector's options to match without
-    // resetting the user's View/scope picks (see refreshSuiteCompareScopeOptions).
-    refreshSuiteCompareScopeOptions(currentUnitOptions);
+    // No/Section/Floor selection change — re-narrow the scope selector's options to match
+    // without resetting the user's View/scope picks (see refreshSuiteCompareScopeOptions).
+    refreshSuiteCompareScopeOptions();
   }
 
   const { lotTypes, statuses: lotTypeStatuses } = await fetchLotTypes(branch, zone, materialType, priceRange, suiteNo);
@@ -1736,6 +1787,7 @@ async function refreshLotLocationFields() {
   }
 
   updateSuiteCompareVisibility();
+  renderLotFilterSummaries();
 }
 
 // Re-fetches Zone (a sibling of Price Range in the cascade — both scoped by branch + material
@@ -1766,13 +1818,15 @@ async function refreshLotCascade() {
   const mode = modeForSelection(materialType);
   applyLotModeUI(mode);
 
-  const gated = [lotFilters.priceRange, lotFilters.zone, lotFilters.suiteNo, lotFilters.section, lotFilters.level, lotFilters.lotType, lotFilters.matrixLotType, lotFilters.status];
+  const gated = [lotFilters.priceRange, lotFilters.zone, lotFilters.suiteNo, lotFilters.section, lotFilters.level, lotFilters.floor, lotFilters.lotType, lotFilters.matrixLotType, lotFilters.status];
 
   if (!mode) {
     gated.forEach(f => { f.setOptions([]); f.setDisabled(true, 'Select product type first'); });
     updateLotTypeFieldVisibility(false);
+    updateFloorFieldVisibility(false);
     updateMatrixLotTypeFieldVisibility(false);
     updateSuiteCompareVisibility();
+    renderLotFilterSummaries();
     const matrixCard = document.getElementById('lotMatrixCard');
     if (matrixCard) matrixCard.style.display = 'none';
     return;
@@ -1798,6 +1852,53 @@ function populateBranchReportSelect(branches) {
     opt.textContent = b;
     select.appendChild(opt);
   }
+}
+
+// ── "Filters Applied" summary ──
+// Mirrors Sales Velocity's veloBuildFilterSummaryParts/renderVeloFilterSummary pattern — a
+// compact, bullet-joined line of only the dimensions actually narrowed from "All", rendered
+// into every Lot Drill-Down surface that shares these filters: the Side-by-Side/Zone
+// Snapshot/By Suite-Section-Floor card, Lot Results, and the Zone Summary Matrix.
+function lotBuildFilterSummaryParts() {
+  const branch = lotFilters.branch.getValues();
+  const materialType = lotFilters.materialType.getValues();
+  const priceRange = lotFilters.priceRange.getValues();
+  const zone = lotFilters.zone.getValues();
+  const lotType = lotFilters.lotType.getValues();
+  const status = lotFilters.status.getValues();
+  const mode = modeForSelection(materialType);
+
+  const parts = [];
+  if (branch.length) parts.push(`Branch ${branch.join('/')}`);
+  if (materialType.length) parts.push(materialType.map(stripNVPrefix).join('/'));
+  if (priceRange.length) parts.push(`Price ${priceRange.join('/')}`);
+  if (zone.length) parts.push(`Zone ${zone.join('/')}`);
+  if (mode === 'structured') {
+    const suiteNo = lotFilters.suiteNo.getValues();
+    const section = lotFilters.section.getValues();
+    const level = lotFilters.level.getValues();
+    const floor = lotFilters.floor.getValues();
+    if (suiteNo.length) parts.push(`Suite ${suiteNo.join('/')}`);
+    if (section.length) parts.push(`Section ${section.join('/')}`);
+    if (level.length) parts.push(`Level ${level.join('/')}`);
+    if (floor.length) parts.push(`Floor ${floor.join('/')}`);
+  }
+  if (lotType.length) parts.push(`Lot Type ${lotType.join('/')}`);
+  if (status.length) parts.push(`Status ${status.join('/')}`);
+  return parts;
+}
+
+function lotFilterSummaryLine() {
+  const parts = lotBuildFilterSummaryParts();
+  return parts.length ? `Filters Applied: ${parts.join(' • ')}` : 'Filters Applied: All data (no filters selected)';
+}
+
+function renderLotFilterSummaries() {
+  const line = lotFilterSummaryLine();
+  ['suiteCompareFilterSummary', 'lotResultsFilterSummary', 'matrixFilterSummary'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = line;
+  });
 }
 
 function initLotFilters() {
@@ -1852,13 +1953,23 @@ function initLotFilters() {
     placeholder: 'All levels',
     disabledText: disabledGateText,
     emptyText: 'No levels found',
+    onChange: renderLotFilterSummaries,
   });
   lotFilters.level.setDisabled(true);
+
+  lotFilters.floor = new MultiSelect('lotFloor', {
+    placeholder: 'All floors',
+    disabledText: disabledGateText,
+    emptyText: 'No floor data',
+    onChange: renderLotFilterSummaries,
+  });
+  lotFilters.floor.setDisabled(true);
 
   lotFilters.lotType = new MultiSelect('lotType', {
     placeholder: 'All lot types',
     disabledText: disabledGateText,
     emptyText: 'No lot types found',
+    onChange: renderLotFilterSummaries,
   });
   lotFilters.lotType.setDisabled(true);
 
@@ -1876,6 +1987,7 @@ function initLotFilters() {
     placeholder: 'All statuses',
     disabledText: disabledGateText,
     emptyText: 'No statuses found',
+    onChange: renderLotFilterSummaries,
   });
   lotFilters.status.setDisabled(true);
 
@@ -1969,34 +2081,81 @@ let suiteCompareScopeSelection = []; // subset of unit values picked while in 's
 let suiteCompareScopeUI = null; // MultiSelect — options mirror the active unit's full option list
 
 // Per-unit-kind config (lotFilters key to read/write, and the singular word used in labels) —
-// lets every render/fetch function below stay generic across Suite No and Section rather than
-// duplicating a parallel Section-specific copy of each one.
+// lets every render/fetch function below stay generic across Suite No, Section, and Floor
+// rather than duplicating a parallel copy of each one per axis. 'zone' has no entry here — it's
+// the base fallback (every render/export path already treats "no meta" as the Zone case).
 const SUITE_COMPARE_UNIT_META = {
   suiteNo: { filterKey: 'suiteNo', label: 'Suite' },
   section: { filterKey: 'section', label: 'Section' },
+  floor:   { filterKey: 'floor',   label: 'Floor' },
 };
 
-// A "unit" is one Suite No, one Section, or one Zone selected in the Lot Drill-Down filters —
-// the thing each side-by-side panel represents. Suite No takes priority when real data exists
-// for the current Branch+Zone+Product Type selection (lotFilters.suiteNo's options, refreshed by
-// refreshLotLocationFields for every mode); else Section, when IT has real data (e.g. GX's
-// Pedestal — 0% Suite No population, but real Sections); else the Zone-keyed fallback (flat-land
-// types, or a structured selection with 0% population in both, e.g. NV EBL). The mode==='structured'
-// guard on Section mirrors the field's own visibility/fetch gating elsewhere — its options would
-// otherwise go stale (not re-fetched) once a flat product type is selected.
-function getSuiteCompareUnitKind() {
+// Default axis priority when the user hasn't made an explicit Compare By pick (or their pick no
+// longer qualifies) — preserves the pre-existing auto behavior (Suite No, else Section, else the
+// Zone fallback) with Floor slotted in after Section, since it's the newest/most-specialized axis.
+const SUITE_COMPARE_KIND_PRIORITY = ['suiteNo', 'section', 'floor', 'zone'];
+
+// Explicit user pick from the "Compare By" selector — one of SUITE_COMPARE_KIND_PRIORITY, or
+// null to auto-pick the highest-priority available kind (see getSuiteCompareUnitKind). Reset to
+// null (back to auto) whenever the underlying option lists change — see resetSuiteCompareControls.
+let suiteCompareUnitChoice = null;
+
+// The real option list backing a given axis — 'zone' reads the main Zone filter, a granular kind
+// reads its own lotFilters field (all three refreshed by refreshLotLocationFields).
+function suiteCompareKindOptions(kind) {
+  if (kind === 'zone') return lotFilters.zone.getOptions();
+  const meta = SUITE_COMPARE_UNIT_META[kind];
+  return meta ? lotFilters[meta.filterKey].getOptions() : [];
+}
+
+// Which axes are worth offering as a "Compare By" choice for the current Branch+Zone+Product
+// Type(+Price Range) selection — Suite No, Section, and Floor coexist as independent axes (e.g.
+// SA MP1 has real, multiple values for both Suite No and Floor at once — see routes/lots.js's
+// getFloors), so this returns every axis with real, MULTIPLE (2+) values, not just the single
+// highest-priority one. Section/Floor are further gated to structured mode (mirrors their own
+// field visibility/fetch gating elsewhere — their options go stale, not re-fetched, once a flat
+// product type is selected). Falls back to whichever axis has at least one real value (the
+// pre-existing single-axis auto-pick threshold) when nothing qualifies as a real comparison, so
+// there's always something to snapshot rather than the card going empty.
+function suiteCompareAvailableKinds() {
   const materialType = lotFilters.materialType.getValues();
   const mode = modeForSelection(materialType);
-  if (!mode) return null;
-  if (lotFilters.suiteNo.getOptions().length > 0) return 'suiteNo';
-  if (mode === 'structured' && lotFilters.section.getOptions().length > 0) return 'section';
-  return 'zone';
+  if (!mode) return [];
+  const pool = SUITE_COMPARE_KIND_PRIORITY.filter(k => (k === 'section' || k === 'floor') ? mode === 'structured' : true);
+  const multi = pool.filter(k => suiteCompareKindOptions(k).length >= 2);
+  if (multi.length) return multi;
+  const any = pool.filter(k => suiteCompareKindOptions(k).length >= 1);
+  return any.length ? [any[0]] : ['zone'];
+}
+
+function suiteCompareDefaultKind(available) {
+  for (const k of SUITE_COMPARE_KIND_PRIORITY) {
+    if (available.includes(k)) return k;
+  }
+  return available[0] || null;
+}
+
+// A "unit" is one Suite No, Section, Floor, or Zone value selected in the Lot Drill-Down
+// filters — the thing each side-by-side panel represents. Resolves the explicit Compare By pick
+// when it's still among the currently available axes (see suiteCompareAvailableKinds), else
+// falls back to the auto default priority.
+function getSuiteCompareUnitKind() {
+  const available = suiteCompareAvailableKinds();
+  if (!available.length) return null;
+  if (suiteCompareUnitChoice && available.includes(suiteCompareUnitChoice)) return suiteCompareUnitChoice;
+  return suiteCompareDefaultKind(available);
 }
 
 // SUITE_COMPARE_UNIT_META entry for the current unit kind, or null for the Zone-keyed fallback
 // (or no selection at all).
 function suiteCompareUnitMeta() {
   return SUITE_COMPARE_UNIT_META[getSuiteCompareUnitKind()] || null;
+}
+
+// The active kind's real option list — used by the scope selector and by the reset helpers below.
+function suiteCompareCurrentUnitOptions() {
+  const kind = getSuiteCompareUnitKind();
+  return kind ? suiteCompareKindOptions(kind) : [];
 }
 
 // True only for a real granular unit (Suite No or Section) being viewed one-panel-per-unit
@@ -2026,15 +2185,34 @@ function getSuiteCompareUnits() {
 function updateSuiteCompareVisibility() {
   const card = document.getElementById('suiteCompareCard');
   if (card && getSuiteCompareUnits().length < 1) card.style.display = 'none';
+  renderSuiteCompareUnitToggle();
   updateSuiteCompareViewRowVisibility();
   updateSuiteCompareScopeRowVisibility();
 }
 
-// The View toggle only makes sense once there's a real granular (Suite No or Section) list to
-// choose a view over — hidden for the Zone-keyed fallback (flat-land, or a structured selection
-// with 0% population in both), which already shows a single zone-level table with no view to
-// switch. Its "By Suite"/"By Section" button reads whichever unit is actually active rather than
-// being hardcoded to "Suite".
+// "Compare By" selector — Suite No / Section / Floor / Zone — only rendered with a real choice to
+// make (2+ axes with real, multiple-value data for the current selection; see
+// suiteCompareAvailableKinds); a single-candidate selection keeps the pre-existing "just use it,
+// nothing to choose" behavior with the row hidden. Rebuilt (not just toggled) on every call since
+// which axes qualify changes with the filter selection.
+function renderSuiteCompareUnitToggle() {
+  const row = document.getElementById('suiteCompareUnitRow');
+  const bar = document.getElementById('suiteCompareUnitToggle');
+  if (!bar) return;
+  const available = suiteCompareAvailableKinds();
+  const activeKind = getSuiteCompareUnitKind();
+  if (row) row.style.display = available.length > 1 ? '' : 'none';
+  bar.innerHTML = available.map(k => {
+    const label = SUITE_COMPARE_UNIT_META[k] ? SUITE_COMPARE_UNIT_META[k].label : 'Zone';
+    return `<button type="button" class="subtab${k === activeKind ? ' active' : ''}" data-unit="${k}">${label}</button>`;
+  }).join('');
+}
+
+// The View toggle only makes sense once there's a real granular (Suite No, Section, or Floor)
+// list to choose a view over — hidden for the Zone-keyed fallback (flat-land, or a structured
+// selection with 0% population in all three), which already shows a single zone-level table with
+// no view to switch. Its "By Suite"/"By Section"/"By Floor" button reads whichever unit is
+// actually active rather than being hardcoded to "Suite".
 function updateSuiteCompareViewRowVisibility() {
   const row = document.getElementById('suiteCompareViewRow');
   const meta = suiteCompareUnitMeta();
@@ -2093,13 +2271,15 @@ function applySuiteCompareScopeLabels() {
   suiteCompareScopeUI.emptyText = `No ${word}s found`;
 }
 
-// Called whenever refreshLotLocationFields refreshes the real Suite No/Section option list
-// (Branch/Zone/Product Type/Price Range change, or the active unit kind itself flipping) — the
-// previously picked view/subset almost certainly no longer matches the new zone's values, so
-// silently carrying it over would misleadingly narrow (or empty out) the next Snapshot render.
-// Resetting to 'Zone Snapshot' / 'All Suites'|'All Sections' is the same "don't guess, show the
-// sensible default until the user narrows again" pattern the rest of Lot Drill-Down uses.
-function resetSuiteCompareControls(unitOptions = []) {
+// Resets the nested View ('Zone Snapshot'|'By <unit>') and "Show Snapshot For" scope controls to
+// their defaults for whichever comparison unit kind is currently active — shared by a real
+// Branch/Zone/Product Type/Price Range change (see resetSuiteCompareControls below) and an
+// explicit Compare By axis switch (see initSuiteCompareUnitControls), which both invalidate a
+// previously picked view/subset the same way: silently carrying it over would misleadingly narrow
+// (or empty out) the next Snapshot render, so both drop back to 'Zone Snapshot' / 'All <unit>s' —
+// the same "don't guess, show the sensible default until the user narrows again" pattern the rest
+// of Lot Drill-Down uses.
+function resetSuiteCompareViewAndScope() {
   suiteCompareViewMode = 'zoneSnapshot';
   const viewToggle = document.getElementById('suiteCompareViewToggle');
   viewToggle?.querySelectorAll('.subtab').forEach(b => b.classList.toggle('active', b.dataset.view === 'zoneSnapshot'));
@@ -2111,22 +2291,51 @@ function resetSuiteCompareControls(unitOptions = []) {
   const scopeField = document.getElementById('suiteCompareScopeField');
   if (scopeField) scopeField.style.display = 'none';
   applySuiteCompareScopeLabels();
-  suiteCompareScopeUI?.setOptions(suiteCompareScopeOptions(unitOptions), { preserveSelection: false });
+  suiteCompareScopeUI?.setOptions(suiteCompareScopeOptions(suiteCompareCurrentUnitOptions()), { preserveSelection: false });
 
   updateSuiteCompareViewRowVisibility();
   updateSuiteCompareScopeRowVisibility();
 }
 
-// Re-narrows the scope selector's options to the current main Suite No/Section selection without
-// resetting the user's View/scope picks — for a Suite No/Section change alone, which doesn't
-// change the zone's real value list (see resetSuiteCompareControls above for that case) but does
-// change what the scope selector should be allowed to offer. preserveSelection keeps any
+// Called whenever refreshLotLocationFields refreshes the real Suite No/Section/Floor option
+// lists (Branch/Zone/Product Type/Price Range change, or the active unit kind itself flipping) —
+// also drops any explicit Compare By pick back to the auto default, since it almost certainly no
+// longer reflects the new selection's real data either.
+function resetSuiteCompareControls() {
+  suiteCompareUnitChoice = null;
+  resetSuiteCompareViewAndScope();
+}
+
+// Re-narrows the scope selector's options to the current main Suite No/Section/Floor selection
+// without resetting the user's View/scope picks — for a location filter change alone, which
+// doesn't change the zone's real value list (see resetSuiteCompareControls above for that case)
+// but does change what the scope selector should be allowed to offer. preserveSelection keeps any
 // already-picked scope values that are still valid; any that just fell out of scope are dropped
 // from both the widget and the app-level selection array that mirrors it.
-function refreshSuiteCompareScopeOptions(unitOptions) {
+function refreshSuiteCompareScopeOptions() {
   applySuiteCompareScopeLabels();
-  suiteCompareScopeUI?.setOptions(suiteCompareScopeOptions(unitOptions), { preserveSelection: true });
+  suiteCompareScopeUI?.setOptions(suiteCompareScopeOptions(suiteCompareCurrentUnitOptions()), { preserveSelection: true });
   if (suiteCompareScopeUI) suiteCompareScopeSelection = suiteCompareScopeUI.getValues();
+}
+
+// Explicit "Compare By" axis switch — changes what "unit" means entirely, so (like a real option
+// list change) it resets the nested View/scope controls, but it must NOT also reset
+// suiteCompareUnitChoice itself (that's what was just set).
+function initSuiteCompareUnitControls() {
+  const toggle = document.getElementById('suiteCompareUnitToggle');
+  toggle?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.subtab[data-unit]');
+    if (!btn || btn.classList.contains('active')) return;
+    suiteCompareUnitChoice = btn.dataset.unit;
+    resetSuiteCompareViewAndScope();
+    renderSuiteCompareUnitToggle();
+    if (getSuiteCompareUnits().length >= 1) {
+      renderSuiteCompare();
+    } else {
+      suiteCompareRaw = [];
+      renderSuiteComparePanels();
+    }
+  });
 }
 
 // The units actually rendered — suiteCompareRaw filtered down to the scope selector's picks
@@ -2328,30 +2537,30 @@ async function renderSuiteCompare() {
   const priceRange = lotFilters.priceRange.getValues();
   const status = lotFilters.status.getValues();
   const lotType = lotFilters.lotType.getValues();
-  // Both location filters' own main selections — real WHERE constraints regardless of which one
-  // (if either) is the active comparison unit; whichever one IS active gets overridden below to
-  // either a single per-panel unit ('bySuite' view) or stays as this same main selection
-  // ('zoneSnapshot' view, e.g. narrowed to a subset of the zone's real suites/sections).
+  // All three location filters' own main selections — real WHERE constraints regardless of
+  // which one (if any) is the active comparison unit; whichever one IS active gets overridden
+  // below to either a single per-panel unit ('bySuite' view) or stays as this same main
+  // selection ('zoneSnapshot' view, e.g. narrowed to a subset of the zone's real values).
   const section = lotFilters.section.getValues();
   const suiteNo = lotFilters.suiteNo.getValues();
+  const floor = lotFilters.floor.getValues();
   const unitKind = getSuiteCompareUnitKind();
   const meta = SUITE_COMPARE_UNIT_META[unitKind] || null;
-  // Real Suite No (or, failing that, Section) data exists, but the user wants it aggregated to
-  // one table per zone rather than one panel per unit — fetch/filter exactly like the Zone-keyed
-  // fallback below (no per-unit override, one unit per selected Zone), just with a distinct
-  // panel label.
+  // Real Suite No/Section/Floor data exists, but the user wants it aggregated to one table per
+  // zone rather than one panel per unit — fetch/filter exactly like the Zone-keyed fallback
+  // below (no per-unit override, one unit per selected Zone), just with a distinct panel label.
   const useZoneAggregate = !!meta && suiteCompareViewMode === 'zoneSnapshot';
   const units = getSuiteCompareUnits();
 
   suiteCompareRaw = await Promise.all(units.map(async (unit) => {
     const zoneFilterValue = (!meta || useZoneAggregate) ? [unit] : zone;
-    const snapshotFilters = { materialType, branch, priceRange, status, lotType, section, suiteNo, zone: zoneFilterValue };
+    const snapshotFilters = { materialType, branch, priceRange, status, lotType, section, suiteNo, floor, zone: zoneFilterValue };
     if (meta && !useZoneAggregate) snapshotFilters[meta.filterKey] = [unit];
     const snapshotRows = await fetchSuiteCompareSnapshot(snapshotFilters);
 
     // Sales Velocity's filters have no Price Range dimension (routes/velocity.js's
     // FILTER_COLUMNS omits it app-wide) — priceRange only narrows the Snapshot query above.
-    const trendFilters = { branch, productType: materialType, lotType, section, suiteNo, zone: zoneFilterValue };
+    const trendFilters = { branch, productType: materialType, lotType, section, suiteNo, floor, zone: zoneFilterValue };
     if (meta && !useZoneAggregate) trendFilters[meta.filterKey] = [unit];
     const trendSeries = await fetchSuiteCompareTrend(trendFilters);
 
@@ -2359,10 +2568,12 @@ async function renderSuiteCompare() {
     if (useZoneAggregate) {
       const realUnits = meta.filterKey === 'suiteNo'
         ? (await fetchLotSuites(branch, [unit], materialType, priceRange)).suites
-        : (await fetchLotSections(branch, [unit], [], materialType, priceRange)).sections;
+        : meta.filterKey === 'section'
+        ? (await fetchLotSections(branch, [unit], [], materialType, priceRange)).sections
+        : (await fetchLotFloors(branch, [unit], [], [], materialType, priceRange)).floors;
       // Match the label's count to what the snapshot query above is actually scoped to — the
       // zone's full real list, narrowed by the main filter when one is active.
-      const mainSelection = meta.filterKey === 'suiteNo' ? suiteNo : section;
+      const mainSelection = meta.filterKey === 'suiteNo' ? suiteNo : meta.filterKey === 'section' ? section : floor;
       const scopedUnits = mainSelection.length ? realUnits.filter(v => mainSelection.includes(v)) : realUnits;
       panelTitle = suiteZoneSnapshotLabel(branch, unit, scopedUnits.length, meta.label);
     } else {
@@ -2592,7 +2803,7 @@ function initSuiteCompareScopeControls() {
 }
 
 function exportSuiteCompareExcel() {
-  if (!suiteCompareRaw.length) { alert('No comparison data to export. Select at least one Suite No, Section, or Zone value first.'); return; }
+  if (!suiteCompareRaw.length) { alert('No comparison data to export. Select at least one Suite No, Section, Floor, or Zone value first.'); return; }
   if (typeof XLSX === 'undefined') { alert('Excel export library failed to load — check your connection and try again.'); return; }
 
   const { from, to } = suiteComparePeriodBounds();
@@ -2672,7 +2883,7 @@ function exportSuiteCompareExcel() {
 // Monthly Trend, stacked via lastAutoTable.finalY) so suites stay visually separated even
 // when a suite's Lot Type list or month range is long enough to spill onto extra pages.
 function exportSuiteComparePDF() {
-  if (!suiteCompareRaw.length) { alert('No comparison data to export. Select at least one Suite No, Section, or Zone value first.'); return; }
+  if (!suiteCompareRaw.length) { alert('No comparison data to export. Select at least one Suite No, Section, Floor, or Zone value first.'); return; }
   if (typeof window.jspdf === 'undefined') { alert('PDF export library failed to load — check your connection and try again.'); return; }
 
   const { jsPDF } = window.jspdf;
@@ -2802,6 +3013,7 @@ function exportSuiteComparePDF() {
 initLotFilters();
 initLotResultsEvents();
 initSuiteCompareControls();
+initSuiteCompareUnitControls();
 initSuiteCompareViewControls();
 initSuiteCompareScopeControls();
 
