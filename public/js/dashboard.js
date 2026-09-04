@@ -2537,12 +2537,15 @@ async function renderSuiteCompare() {
   const priceRange = lotFilters.priceRange.getValues();
   const status = lotFilters.status.getValues();
   const lotType = lotFilters.lotType.getValues();
-  // All three location filters' own main selections — real WHERE constraints regardless of
-  // which one (if any) is the active comparison unit; whichever one IS active gets overridden
-  // below to either a single per-panel unit ('bySuite' view) or stays as this same main
-  // selection ('zoneSnapshot' view, e.g. narrowed to a subset of the zone's real values).
+  // Suite No/Section/Floor's own main selections — real WHERE constraints regardless of which
+  // one (if any) is the active comparison unit; whichever one IS active gets overridden below to
+  // either a single per-panel unit ('bySuite' view) or stays as this same main selection
+  // ('zoneSnapshot' view, e.g. narrowed to a subset of the zone's real values). Level isn't a
+  // comparison-unit candidate (not in SUITE_COMPARE_UNIT_META) — it's always just a plain WHERE
+  // constraint here, same as Lot Type/Status/Price Range below.
   const section = lotFilters.section.getValues();
   const suiteNo = lotFilters.suiteNo.getValues();
+  const level = lotFilters.level.getValues();
   const floor = lotFilters.floor.getValues();
   const unitKind = getSuiteCompareUnitKind();
   const meta = SUITE_COMPARE_UNIT_META[unitKind] || null;
@@ -2554,13 +2557,13 @@ async function renderSuiteCompare() {
 
   suiteCompareRaw = await Promise.all(units.map(async (unit) => {
     const zoneFilterValue = (!meta || useZoneAggregate) ? [unit] : zone;
-    const snapshotFilters = { materialType, branch, priceRange, status, lotType, section, suiteNo, floor, zone: zoneFilterValue };
+    const snapshotFilters = { materialType, branch, priceRange, status, lotType, section, suiteNo, level, floor, zone: zoneFilterValue };
     if (meta && !useZoneAggregate) snapshotFilters[meta.filterKey] = [unit];
     const snapshotRows = await fetchSuiteCompareSnapshot(snapshotFilters);
 
     // Sales Velocity's filters have no Price Range dimension (routes/velocity.js's
     // FILTER_COLUMNS omits it app-wide) — priceRange only narrows the Snapshot query above.
-    const trendFilters = { branch, productType: materialType, lotType, section, suiteNo, floor, zone: zoneFilterValue };
+    const trendFilters = { branch, productType: materialType, lotType, section, suiteNo, level, floor, zone: zoneFilterValue };
     if (meta && !useZoneAggregate) trendFilters[meta.filterKey] = [unit];
     const trendSeries = await fetchSuiteCompareTrend(trendFilters);
 
