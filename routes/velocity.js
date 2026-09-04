@@ -35,6 +35,7 @@ const FILTER_COLUMNS = {
   suiteNo:     'Suite No',
   section:     'Section',
   level:       'Level No',
+  floor:       'Floor',
   eyeLevel:    'Eye Level/Non Eye Level',
   lotType:     'Lot Type',
 };

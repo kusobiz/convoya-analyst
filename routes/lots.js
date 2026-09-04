@@ -70,6 +70,7 @@ const FILTER_COLUMNS = {
   suiteNo:      'Suite No',
   section:      'Section',
   level:        'Level No',
+  floor:        'Floor',
   lotType:      'Lot Type',
   status:       'Status',
   priceRange:   'Price Range',
@@ -307,6 +308,18 @@ export function getLevels(filters = {}) {
   return distinctColumn('Level No', where, params);
 }
 
+// Floor is an independent axis from the Suite No -> Section -> Zone hierarchy, not a
+// replacement tier in it (most zones have at most one real Floor value, genuinely redundant
+// with the zone itself — but a handful of zones carry real, multiple Floor values, e.g. SA
+// MP1/MP2's GF/1F, alongside their own real Suite No/Section data). Scoped the same way Level
+// is — by the full location cascade selected so far — so its own dropdown only ever offers
+// values that actually exist for the current Branch/Zone/Suite No/Section pick.
+export function getFloors(filters = {}) {
+  const { branch, zone, suiteNo, section, materialType, priceRange, bigLotFilter } = filters;
+  const { where, params } = buildWhere({ branch, zone, suiteNo, section, materialType, priceRange, bigLotFilter });
+  return distinctColumn('Floor', where, params);
+}
+
 // Lot types are scoped by branch + material type + zone + (optionally) suite no. suiteNo lets
 // the main Lot Drill-Down filter narrow Lot Type down to one Suite's actual values (some
 // structured-product suites carry meaningful Lot Types like SINGLE/DOUBLE, others don't) —
@@ -401,6 +414,18 @@ router.get('/levels', (req, res) => {
     res.json({ levels, statuses });
   } catch (err) {
     console.error('Lot levels query error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/floors', (req, res) => {
+  try {
+    const { branch, zone, suiteNo, section, materialType, priceRange, bigLotFilter } = req.query;
+    const floors   = getFloors({ branch, zone, suiteNo, section, materialType, priceRange, bigLotFilter });
+    const statuses = getStatuses({ branch, zone, suiteNo, section, materialType, priceRange, bigLotFilter });
+    res.json({ floors, statuses });
+  } catch (err) {
+    console.error('Lot floors query error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
