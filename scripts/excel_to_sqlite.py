@@ -1,6 +1,29 @@
+import argparse
+import re
+import sys
+
 import pandas as pd
 import sqlite3
-from datetime import datetime
+
+parser = argparse.ArgumentParser(
+    description='Load data/stock_data.xlsx into stock.db and capture a monthly snapshot.'
+)
+parser.add_argument(
+    '--month',
+    required=True,
+    metavar='YYYY-MM',
+    help='The period the uploaded file represents, e.g. 2026-08. Required — this is NOT '
+         'inferred from the system date, since the file may be loaded on any day of any month.'
+)
+args = parser.parse_args()
+
+if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', args.month):
+    sys.exit(
+        f"error: --month must be in YYYY-MM format (e.g. 2026-08), got {args.month!r}. "
+        f"Specify the period the uploaded file actually represents — this script will not "
+        f"guess it from the system date."
+    )
+year_month = args.month
 
 print("Reading Excel file (this may take 30-60 seconds)...")
 df = pd.read_excel(
@@ -31,10 +54,11 @@ df.to_sql('master_stock', conn, if_exists='replace', index=False)
 
 # Monthly Trend snapshot — captures this update as one point in the Overview tab's trend line.
 # CREATE TABLE IF NOT EXISTS so this script also works against a fresh stock.db with no prior
-# snapshots. Keyed on the real-world calendar month the update is RUN in (not any date field
-# inside the spreadsheet), so the trend reflects "when did we last update" — re-running this
-# script for the same month (e.g. correcting a bad file) overwrites that month's row via INSERT OR
-# REPLACE on the UNIQUE year_month key rather than duplicating it.
+# snapshots. Keyed on the period the caller passes via --month (the period the uploaded file
+# actually represents), NOT the system date the script happens to run on — a file can be loaded
+# late, or re-run to correct a bad capture, on any day of any month. Re-running this script for
+# the same --month (e.g. correcting a bad file) overwrites that month's row via INSERT OR REPLACE
+# on the UNIQUE year_month key rather than duplicating it.
 cur = conn.cursor()
 cur.execute('''
     CREATE TABLE IF NOT EXISTS monthly_snapshots (
@@ -58,7 +82,6 @@ total_stock, total_sold, total_balance, balance_value = cur.execute('''
     FROM master_stock
 ''').fetchone()
 sell_through_pct = (total_sold / total_stock * 100) if total_stock else 0
-year_month = datetime.now().strftime('%Y-%m')
 
 cur.execute('''
     INSERT OR REPLACE INTO monthly_snapshots
