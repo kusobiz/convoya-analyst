@@ -92,7 +92,7 @@ OVERVIEW KPIs:
 BRANCH SUMMARY (${branchList.length} branches):
 ${branchTable}
 
-PRODUCT SUMMARY (9 products):
+PRODUCT SUMMARY (${products.length} products):
 ${productTable}
 
 BD FOCUS ZONE SUMMARY:
@@ -108,7 +108,7 @@ DOMAIN RULES:
 - Status = OPEN means unsold/available inventory
 - BD Focus Zone = "yes" flags priority sales zones
 - Branches: ${branchList.join(', ')} (all Central Region)
-- Products: NV Niche, NV Burial Plot, NV Pedestal, NV Seed, NV Pet Niche, NV EBL, NV Urn Burial Plot, NV Baby Paradise, NV Pet Burial Plot
+- Products: ${products.map(p => p.product).join(', ')}
 
 RESPONSE GUIDELINES:
 - Be concise, data-driven, and action-oriented

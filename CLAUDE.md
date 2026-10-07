@@ -12,8 +12,11 @@ Node.js ESM (type: module in package.json) · Express · xlsx · pptxgenjs · Ch
 - Status = OPEN means unsold/available inventory
 - BD Focus Zone = "yes" means priority sales zone
 - Branches vary by data load (currently 9, incl. KL, SA, GX, SE, IJ, IP, KR, KN, N3) — always query distinct Branch from master_stock, never hardcode the list
-- 9 products: NV Niche, NV Burial Plot, NV Pedestal, NV Seed, NV Pet Niche,
-  NV EBL, NV Urn Burial Plot, NV Baby Paradise, NV Pet Burial Plot
+- Products vary by data load (currently 8: NV Niche, NV Burial Plot, NV Pedestal, NV Seed,
+  NV Pet Niche, NV EBL, NV Urn Burial Plot, NV Pet Burial Plot) — derive from master_stock,
+  never hardcode the list. NV Baby Paradise was removed from inventory in Sep 2026 (see data_notes)
+- data_notes (owned by routes/overview.js) holds month-labelled explanations shown under the
+  Overview Monthly Trend chart; GET /api/data-notes
 
 ## Auth
 - Session-based, multi-user — accounts live in the `users` table (data/stock.db), managed via

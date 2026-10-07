@@ -455,6 +455,16 @@ body {
   margin-top: 0.1rem;
 }
 
+/* Month-labelled data notes under the Monthly Trend chart — muted annotation, not a headline. */
+.trend-data-notes {
+  margin-top: 0.6rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.trend-data-notes p { margin: 0.2rem 0 0; }
+.trend-data-notes[hidden] { display: none; }
+
 /* ── Tables ── */
 .table-card {
   background: var(--white);

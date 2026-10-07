@@ -23,7 +23,7 @@ import pricingRouter from './routes/pricing.js';
 import velocityRouter from './routes/velocity.js';
 import lifecycleRouter, { clearMigrationDateCache } from './routes/lifecycle.js';
 import attributesRouter from './routes/attributes.js';
-import overviewRouter from './routes/overview.js';
+import overviewRouter, { dataNotesRouter } from './routes/overview.js';
 import snapshotsRouter from './routes/snapshots.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -107,6 +107,7 @@ app.use('/api/velocity', velocityRouter);
 app.use('/api/lifecycle', lifecycleRouter);
 app.use('/api/attributes', attributesRouter);
 app.use('/api/overview', overviewRouter);
+app.use('/api/data-notes', dataNotesRouter);
 app.use('/api/snapshots', snapshotsRouter);
 app.use('/api/admin', adminRouter);
 

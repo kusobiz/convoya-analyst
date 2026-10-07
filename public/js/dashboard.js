@@ -510,6 +510,25 @@ async function loadMonthlyTrend() {
   }
 }
 
+// Short explanatory notes per month (data_notes, e.g. a product removed from inventory), shown
+// under the Monthly Trend chart. Stays hidden when there are none.
+async function loadDataNotes() {
+  const el = document.getElementById('trendDataNotes');
+  if (!el) return;
+  try {
+    const res = await fetch('/api/data-notes');
+    if (res.status === 401 || res.redirected || res.url.includes('/login')) return;
+    if (!res.ok) throw new Error('Failed to load data notes');
+    const { notes } = await res.json();
+    el.innerHTML = notes.map(n =>
+      `<p><strong>${escapeHtml(formatTrendMonth(n.yearMonth))}:</strong> ${escapeHtml(n.note)}</p>`
+    ).join('');
+    el.hidden = !notes.length;
+  } catch (err) {
+    console.error('[dashboard] loadDataNotes failed:', err);
+  }
+}
+
 // ── Lot Drill-Down ──
 let lastLotRows = [];
 let lastLotMode = 'structured';
@@ -4443,6 +4462,7 @@ async function initDashboard() {
     // Not part of the bigLotFilter-scoped /api/data payload — monthly_snapshots has no filters
     // (see its own comments), so this runs independently and doesn't block KPI/chart rendering.
     loadMonthlyTrend();
+    loadDataNotes();
 
     const qs = window.bigLotFilter && window.bigLotFilter !== 'all' ? `?bigLotFilter=${window.bigLotFilter}` : '';
     const res = await fetch(`/api/data${qs}`);
